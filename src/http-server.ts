@@ -132,6 +132,24 @@ export function createHttpServer(tools: RobloxStudioTools, bridge: BridgeService
     res.json({ success: true });
   });
 
+  app.post('/proxy', async (req, res) => {
+    const { endpoint, data } = req.body ?? {};
+
+    if (typeof endpoint !== 'string' || endpoint.length === 0) {
+      res.status(400).json({ error: 'endpoint is required' });
+      return;
+    }
+
+    try {
+      const response = await bridge.sendRequest(endpoint, data);
+      res.json({ response });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const status = message === 'Request timeout' ? 504 : 500;
+      res.status(status).json({ error: message });
+    }
+  });
+
 
 
   app.use('/mcp/*', (req, res, next) => {
@@ -281,7 +299,7 @@ export function createHttpServer(tools: RobloxStudioTools, bridge: BridgeService
 
   app.post('/mcp/get_script_source', async (req, res) => {
     try {
-      const result = await tools.getScriptSource(req.body.instancePath);
+      const result = await tools.getScriptSource(req.body.instancePath, req.body.startLine, req.body.endLine);
       res.json(result);
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : 'Unknown error' });
@@ -478,6 +496,24 @@ export function createHttpServer(tools: RobloxStudioTools, bridge: BridgeService
   app.post('/mcp/get_tagged', async (req, res) => {
     try {
       const result = await tools.getTagged(req.body.tagName);
+      res.json(result);
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  });
+
+  app.post('/mcp/undo', async (_req, res) => {
+    try {
+      const result = await tools.undo();
+      res.json(result);
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  });
+
+  app.post('/mcp/redo', async (_req, res) => {
+    try {
+      const result = await tools.redo();
       res.json(result);
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : 'Unknown error' });

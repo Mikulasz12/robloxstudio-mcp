@@ -17,7 +17,9 @@
     "build:plugin": "node scripts/build-plugin.mjs",
     "build:all": "npm run build && npm run build:plugin",
     "dev": "tsx src/index.ts",
+    "dev:http": "tsx src/index.ts --streamable-http",
     "start": "node dist/index.js",
+    "start:http": "node dist/index.js --streamable-http",
     "lint": "eslint src/**/*.ts",
     "typecheck": "tsc --noEmit",
     "test": "jest",
@@ -44,10 +46,9 @@
     "url": "https://github.com/boshyxd/robloxstudio-mcp/issues"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^0.6.0",
+    "@modelcontextprotocol/sdk": "^1.26.0",
     "cors": "^2.8.5",
     "express": "^4.18.2",
-    "node-fetch": "^3.3.2",
     "uuid": "^9.0.1",
     "ws": "^8.14.2"
   },

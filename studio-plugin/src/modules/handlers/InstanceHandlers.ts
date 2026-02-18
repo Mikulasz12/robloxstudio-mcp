@@ -1,8 +1,8 @@
 import Utils from "../Utils";
-
-const ChangeHistoryService = game.GetService("ChangeHistoryService");
+import Recording from "../Recording";
 
 const { getInstancePath, getInstanceByPath, convertPropertyValue } = Utils;
+const { beginRecording, finishRecording } = Recording;
 
 function createObject(requestData: Record<string, unknown>) {
 	const className = requestData.className as string;
@@ -16,6 +16,7 @@ function createObject(requestData: Record<string, unknown>) {
 
 	const parentInstance = getInstanceByPath(parentPath);
 	if (!parentInstance) return { error: `Parent instance not found: ${parentPath}` };
+	const recordingId = beginRecording(`Create ${className}`);
 
 	const [success, newInstance] = pcall(() => {
 		const instance = new Instance(className as keyof CreatableInstances);
@@ -28,11 +29,11 @@ function createObject(requestData: Record<string, unknown>) {
 		}
 
 		instance.Parent = parentInstance;
-		ChangeHistoryService.SetWaypoint(`Create ${className}`);
 		return instance;
 	});
 
 	if (success && newInstance) {
+		finishRecording(recordingId, true);
 		return {
 			success: true,
 			className,
@@ -42,6 +43,7 @@ function createObject(requestData: Record<string, unknown>) {
 			message: "Object created successfully",
 		};
 	} else {
+		finishRecording(recordingId, false);
 		return { error: `Failed to create object: ${newInstance}`, className, parent: parentPath };
 	}
 }
@@ -53,18 +55,18 @@ function deleteObject(requestData: Record<string, unknown>) {
 	const instance = getInstanceByPath(instancePath);
 	if (!instance) return { error: `Instance not found: ${instancePath}` };
 	if (instance === game) return { error: "Cannot delete the game instance" };
+	const recordingId = beginRecording(`Delete ${instance.ClassName} (${instance.Name})`);
 
 	const [success, result] = pcall(() => {
-		const name = instance.Name;
-		const className = instance.ClassName;
 		instance.Destroy();
-		ChangeHistoryService.SetWaypoint(`Delete ${className} (${name})`);
 		return true;
 	});
 
 	if (success) {
+		finishRecording(recordingId, true);
 		return { success: true, instancePath, message: "Object deleted successfully" };
 	} else {
+		finishRecording(recordingId, false);
 		return { error: `Failed to delete object: ${result}`, instancePath };
 	}
 }
@@ -78,6 +80,7 @@ function massCreateObjects(requestData: Record<string, unknown>) {
 	const results: Record<string, unknown>[] = [];
 	let successCount = 0;
 	let failureCount = 0;
+	const recordingId = beginRecording("Mass create objects");
 
 	for (const objData of objects) {
 		const className = objData.className as string;
@@ -115,7 +118,7 @@ function massCreateObjects(requestData: Record<string, unknown>) {
 		}
 	}
 
-	if (successCount > 0) ChangeHistoryService.SetWaypoint("Mass create objects");
+	finishRecording(recordingId, successCount > 0);
 	return { results, summary: { total: (objects as defined[]).size(), succeeded: successCount, failed: failureCount } };
 }
 
@@ -128,6 +131,7 @@ function massCreateObjectsWithProperties(requestData: Record<string, unknown>) {
 	const results: Record<string, unknown>[] = [];
 	let successCount = 0;
 	let failureCount = 0;
+	const recordingId = beginRecording("Mass create objects with properties");
 
 	for (const objData of objects) {
 		const className = objData.className as string;
@@ -175,11 +179,11 @@ function massCreateObjectsWithProperties(requestData: Record<string, unknown>) {
 		}
 	}
 
-	if (successCount > 0) ChangeHistoryService.SetWaypoint("Mass create objects with properties");
+	finishRecording(recordingId, successCount > 0);
 	return { results, summary: { total: (objects as defined[]).size(), succeeded: successCount, failed: failureCount } };
 }
 
-function smartDuplicate(requestData: Record<string, unknown>) {
+function performSmartDuplicate(requestData: Record<string, unknown>, useRecording = true) {
 	const instancePath = requestData.instancePath as string;
 	const count = requestData.count as number;
 	const options = (requestData.options as Record<string, unknown>) ?? {};
@@ -190,6 +194,7 @@ function smartDuplicate(requestData: Record<string, unknown>) {
 
 	const instance = getInstanceByPath(instancePath);
 	if (!instance) return { error: `Instance not found: ${instancePath}` };
+	const recordingId = useRecording ? beginRecording(`Smart duplicate ${instance.Name}`) : undefined;
 
 	const results: Record<string, unknown>[] = [];
 	let successCount = 0;
@@ -270,15 +275,17 @@ function smartDuplicate(requestData: Record<string, unknown>) {
 		}
 	}
 
-	if (successCount > 0) {
-		ChangeHistoryService.SetWaypoint(`Smart duplicate ${instance.Name} (${successCount} copies)`);
-	}
+	finishRecording(recordingId, successCount > 0);
 
 	return {
 		results,
 		summary: { total: count, succeeded: successCount, failed: failureCount },
 		sourceInstance: instancePath,
 	};
+}
+
+function smartDuplicate(requestData: Record<string, unknown>) {
+	return performSmartDuplicate(requestData, true);
 }
 
 function massDuplicate(requestData: Record<string, unknown>) {
@@ -290,9 +297,10 @@ function massDuplicate(requestData: Record<string, unknown>) {
 	const allResults: Record<string, unknown>[] = [];
 	let totalSuccess = 0;
 	let totalFailures = 0;
+	const recordingId = beginRecording("Mass duplicate operations");
 
 	for (const duplication of duplications) {
-		const result = smartDuplicate(duplication) as { summary?: { succeeded: number; failed: number } };
+		const result = performSmartDuplicate(duplication, false) as { summary?: { succeeded: number; failed: number } };
 		allResults.push(result as unknown as Record<string, unknown>);
 		if (result.summary) {
 			totalSuccess += result.summary.succeeded;
@@ -300,9 +308,7 @@ function massDuplicate(requestData: Record<string, unknown>) {
 		}
 	}
 
-	if (totalSuccess > 0) {
-		ChangeHistoryService.SetWaypoint(`Mass duplicate operations (${totalSuccess} objects)`);
-	}
+	finishRecording(recordingId, totalSuccess > 0);
 
 	return {
 		results: allResults,

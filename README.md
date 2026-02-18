@@ -60,6 +60,55 @@ Plugin shows "Connected" when ready.
 ```
 </details>
 
+## Shared Daemon Mode (Recommended for Multiple Codex/Claude Sessions)
+
+The quick-start `npx ...` commands above use stdio, which launches one MCP process per client session.
+
+If you want multiple AI sessions to share one MCP instance, run this server in Streamable HTTP mode and connect clients with a `url`.
+
+Start daemon:
+
+```bash
+npx -y robloxstudio-mcp@latest --streamable-http
+```
+
+Windows PowerShell helper (repo checkout):
+
+```powershell
+./scripts/start-streamable-http.ps1
+```
+
+Example with custom ports:
+
+```powershell
+./scripts/start-streamable-http.ps1 -StudioPort 58742 -McpPort 59001
+```
+
+Use published package instead of local `dist`:
+
+```powershell
+./scripts/start-streamable-http.ps1 -UseNpx
+```
+
+Environment variables:
+
+- `MCP_TRANSPORT=streamable-http` (or `--streamable-http`)
+- `MCP_HTTP_HOST` (default `127.0.0.1`)
+- `MCP_HTTP_PORT` (default `59000`)
+- `MCP_HTTP_PATH` (default `/mcp`)
+- `ROBLOX_STUDIO_PORT` (plugin bridge port, default `58741`)
+- `ROBLOX_STUDIO_PORT_RETRY_COUNT` (set to `1` for single-primary behavior)
+
+Codex config example:
+
+```toml
+[mcp_servers.robloxstudio]
+url = "http://127.0.0.1:59000/mcp"
+enabled = true
+```
+
+Run one daemon per Studio target (per plugin bridge port). For a second Studio instance, run another daemon with a different `ROBLOX_STUDIO_PORT` and `MCP_HTTP_PORT`.
+
 ## What Can You Do?
 
 Ask things like: *"What's the structure of this game?"*, *"Find scripts with deprecated APIs"*, *"Create 50 test NPCs in a grid"*, *"Optimize this movement code"*

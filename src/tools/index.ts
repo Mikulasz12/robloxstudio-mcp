@@ -675,4 +675,28 @@ export class RobloxStudioTools {
       ]
     };
   }
+
+  async undo() {
+    const response = await this.client.request('/api/undo', {});
+    return {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify(response, null, 2)
+        }
+      ]
+    };
+  }
+
+  async redo() {
+    const response = await this.client.request('/api/redo', {});
+    return {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify(response, null, 2)
+        }
+      ]
+    };
+  }
 }

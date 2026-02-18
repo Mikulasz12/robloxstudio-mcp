@@ -89,6 +89,8 @@ local routeMap = {
 	["/api/get-tagged"] = MetadataHandlers.getTagged,
 	["/api/get-selection"] = MetadataHandlers.getSelection,
 	["/api/execute-luau"] = MetadataHandlers.executeLuau,
+	["/api/undo"] = MetadataHandlers.undo,
+	["/api/redo"] = MetadataHandlers.redo,
 	["/api/start-playtest"] = TestHandlers.startPlaytest,
 	["/api/stop-playtest"] = TestHandlers.stopPlaytest,
 	["/api/get-playtest-output"] = TestHandlers.getPlaytestOutput,
@@ -469,11 +471,14 @@ return {
             <string name="Source"><![CDATA[-- Compiled with roblox-ts v3.0.0
 local TS = require(script.Parent.Parent.Parent.include.RuntimeLib)
 local Utils = TS.import(script, script.Parent.Parent, "Utils")
-local ChangeHistoryService = game:GetService("ChangeHistoryService")
+local Recording = TS.import(script, script.Parent.Parent, "Recording")
 local _binding = Utils
 local getInstancePath = _binding.getInstancePath
 local getInstanceByPath = _binding.getInstanceByPath
 local convertPropertyValue = _binding.convertPropertyValue
+local _binding_1 = Recording
+local beginRecording = _binding_1.beginRecording
+local finishRecording = _binding_1.finishRecording
 local function createObject(requestData)
 	local className = requestData.className
 	local parentPath = requestData.parent
@@ -490,6 +495,7 @@ local function createObject(requestData)
 			error = `Parent instance not found: {parentPath}`,
 		}
 	end
+	local recordingId = beginRecording(`Create {className}`)
 	local success, newInstance = pcall(function()
 		local instance = Instance.new(className)
 		if name ~= "" and name then
@@ -501,10 +507,10 @@ local function createObject(requestData)
 			end)
 		end
 		instance.Parent = parentInstance
-		ChangeHistoryService:SetWaypoint(`Create {className}`)
 		return instance
 	end)
 	if success and newInstance then
+		finishRecording(recordingId, true)
 		return {
 			success = true,
 			className = className,
@@ -514,6 +520,7 @@ local function createObject(requestData)
 			message = "Object created successfully",
 		}
 	else
+		finishRecording(recordingId, false)
 		return {
 			error = `Failed to create object: {newInstance}`,
 			className = className,
@@ -539,20 +546,20 @@ local function deleteObject(requestData)
 			error = "Cannot delete the game instance",
 		}
 	end
+	local recordingId = beginRecording(`Delete {instance.ClassName} ({instance.Name})`)
 	local success, result = pcall(function()
-		local name = instance.Name
-		local className = instance.ClassName
 		instance:Destroy()
-		ChangeHistoryService:SetWaypoint(`Delete {className} ({name})`)
 		return true
 	end)
 	if success then
+		finishRecording(recordingId, true)
 		return {
 			success = true,
 			instancePath = instancePath,
 			message = "Object deleted successfully",
 		}
 	else
+		finishRecording(recordingId, false)
 		return {
 			error = `Failed to delete object: {result}`,
 			instancePath = instancePath,
@@ -569,6 +576,7 @@ local function massCreateObjects(requestData)
 	local results = {}
 	local successCount = 0
 	local failureCount = 0
+	local recordingId = beginRecording("Mass create objects")
 	for _, objData in objects do
 		local className = objData.className
 		local parentPath = objData.parent
@@ -626,9 +634,7 @@ local function massCreateObjects(requestData)
 			})
 		end
 	end
-	if successCount > 0 then
-		ChangeHistoryService:SetWaypoint("Mass create objects")
-	end
+	finishRecording(recordingId, successCount > 0)
 	return {
 		results = results,
 		summary = {
@@ -648,6 +654,7 @@ local function massCreateObjectsWithProperties(requestData)
 	local results = {}
 	local successCount = 0
 	local failureCount = 0
+	local recordingId = beginRecording("Mass create objects with properties")
 	for _, objData in objects do
 		local className = objData.className
 		local parentPath = objData.parent
@@ -714,9 +721,7 @@ local function massCreateObjectsWithProperties(requestData)
 			})
 		end
 	end
-	if successCount > 0 then
-		ChangeHistoryService:SetWaypoint("Mass create objects with properties")
-	end
+	finishRecording(recordingId, successCount > 0)
 	return {
 		results = results,
 		summary = {
@@ -726,7 +731,10 @@ local function massCreateObjectsWithProperties(requestData)
 		},
 	}
 end
-local function smartDuplicate(requestData)
+local function performSmartDuplicate(requestData, useRecording)
+	if useRecording == nil then
+		useRecording = true
+	end
 	local instancePath = requestData.instancePath
 	local count = requestData.count
 	local options = (requestData.options) or {}
@@ -741,6 +749,7 @@ local function smartDuplicate(requestData)
 			error = `Instance not found: {instancePath}`,
 		}
 	end
+	local recordingId = if useRecording then beginRecording(`Smart duplicate {instance.Name}`) else nil
 	local results = {}
 	local successCount = 0
 	local failureCount = 0
@@ -885,9 +894,7 @@ local function smartDuplicate(requestData)
 			_i = i
 		end
 	end
-	if successCount > 0 then
-		ChangeHistoryService:SetWaypoint(`Smart duplicate {instance.Name} ({successCount} copies)`)
-	end
+	finishRecording(recordingId, successCount > 0)
 	return {
 		results = results,
 		summary = {
@@ -897,6 +904,9 @@ local function smartDuplicate(requestData)
 		},
 		sourceInstance = instancePath,
 	}
+end
+local function smartDuplicate(requestData)
+	return performSmartDuplicate(requestData, true)
 end
 local function massDuplicate(requestData)
 	local duplications = requestData.duplications
@@ -908,17 +918,16 @@ local function massDuplicate(requestData)
 	local allResults = {}
 	local totalSuccess = 0
 	local totalFailures = 0
+	local recordingId = beginRecording("Mass duplicate operations")
 	for _, duplication in duplications do
-		local result = smartDuplicate(duplication)
+		local result = performSmartDuplicate(duplication, false)
 		table.insert(allResults, result)
 		if result.summary then
 			totalSuccess += result.summary.succeeded
 			totalFailures += result.summary.failed
 		end
 	end
-	if totalSuccess > 0 then
-		ChangeHistoryService:SetWaypoint(`Mass duplicate operations ({totalSuccess} objects)`)
-	end
+	finishRecording(recordingId, totalSuccess > 0)
 	return {
 		results = allResults,
 		summary = {
@@ -946,11 +955,15 @@ return {
 local TS = require(script.Parent.Parent.Parent.include.RuntimeLib)
 local CollectionService = TS.import(script, script.Parent.Parent.Parent, "node_modules", "@rbxts", "services").CollectionService
 local Utils = TS.import(script, script.Parent.Parent, "Utils")
+local Recording = TS.import(script, script.Parent.Parent, "Recording")
 local ChangeHistoryService = game:GetService("ChangeHistoryService")
 local Selection = game:GetService("Selection")
 local _binding = Utils
 local getInstancePath = _binding.getInstancePath
 local getInstanceByPath = _binding.getInstanceByPath
+local _binding_1 = Recording
+local beginRecording = _binding_1.beginRecording
+local finishRecording = _binding_1.finishRecording
 local function serializeValue(value)
 	local _value = value
 	local vType = typeof(_value)
@@ -1133,10 +1146,10 @@ local function setAttribute(requestData)
 			error = `Instance not found: {instancePath}`,
 		}
 	end
+	local recordingId = beginRecording(`Set attribute {attributeName} on {instance.Name}`)
 	local success, result = pcall(function()
 		local value = deserializeValue(attributeValue, valueType)
 		instance:SetAttribute(attributeName, value)
-		ChangeHistoryService:SetWaypoint(`Set attribute {attributeName} on {instance.Name}`)
 		return {
 			success = true,
 			instancePath = instancePath,
@@ -1146,8 +1159,10 @@ local function setAttribute(requestData)
 		}
 	end)
 	if success then
+		finishRecording(recordingId, true)
 		return result
 	end
+	finishRecording(recordingId, false)
 	return {
 		error = `Failed to set attribute: {result}`,
 	}
@@ -1203,10 +1218,10 @@ local function deleteAttribute(requestData)
 			error = `Instance not found: {instancePath}`,
 		}
 	end
+	local recordingId = beginRecording(`Delete attribute {attributeName} from {instance.Name}`)
 	local success, result = pcall(function()
 		local existed = instance:GetAttribute(attributeName) ~= nil
 		instance:SetAttribute(attributeName, nil)
-		ChangeHistoryService:SetWaypoint(`Delete attribute {attributeName} from {instance.Name}`)
 		return {
 			success = true,
 			instancePath = instancePath,
@@ -1216,8 +1231,10 @@ local function deleteAttribute(requestData)
 		}
 	end)
 	if success then
+		finishRecording(recordingId, true)
 		return result
 	end
+	finishRecording(recordingId, false)
 	return {
 		error = `Failed to delete attribute: {result}`,
 	}
@@ -1264,10 +1281,10 @@ local function addTag(requestData)
 			error = `Instance not found: {instancePath}`,
 		}
 	end
+	local recordingId = beginRecording(`Add tag {tagName} to {instance.Name}`)
 	local success, result = pcall(function()
 		local alreadyHad = CollectionService:HasTag(instance, tagName)
 		CollectionService:AddTag(instance, tagName)
-		ChangeHistoryService:SetWaypoint(`Add tag {tagName} to {instance.Name}`)
 		return {
 			success = true,
 			instancePath = instancePath,
@@ -1277,8 +1294,10 @@ local function addTag(requestData)
 		}
 	end)
 	if success then
+		finishRecording(recordingId, true)
 		return result
 	end
+	finishRecording(recordingId, false)
 	return {
 		error = `Failed to add tag: {result}`,
 	}
@@ -1297,10 +1316,10 @@ local function removeTag(requestData)
 			error = `Instance not found: {instancePath}`,
 		}
 	end
+	local recordingId = beginRecording(`Remove tag {tagName} from {instance.Name}`)
 	local success, result = pcall(function()
 		local hadTag = CollectionService:HasTag(instance, tagName)
 		CollectionService:RemoveTag(instance, tagName)
-		ChangeHistoryService:SetWaypoint(`Remove tag {tagName} from {instance.Name}`)
 		return {
 			success = true,
 			instancePath = instancePath,
@@ -1310,8 +1329,10 @@ local function removeTag(requestData)
 		}
 	end)
 	if success then
+		finishRecording(recordingId, true)
 		return result
 	end
+	finishRecording(recordingId, false)
 	return {
 		error = `Failed to remove tag: {result}`,
 	}
@@ -1442,6 +1463,36 @@ local function executeLuau(requestData)
 		}
 	end
 end
+local function undo(_requestData)
+	local success, result = pcall(function()
+		ChangeHistoryService:Undo()
+		return {
+			success = true,
+			message = "Undo executed successfully",
+		}
+	end)
+	if success then
+		return result
+	end
+	return {
+		error = `Failed to undo: {result}`,
+	}
+end
+local function redo(_requestData)
+	local success, result = pcall(function()
+		ChangeHistoryService:Redo()
+		return {
+			success = true,
+			message = "Redo executed successfully",
+		}
+	end)
+	if success then
+		return result
+	end
+	return {
+		error = `Failed to redo: {result}`,
+	}
+end
 return {
 	getAttribute = getAttribute,
 	setAttribute = setAttribute,
@@ -1453,6 +1504,8 @@ return {
 	getTagged = getTagged,
 	getSelection = getSelection,
 	executeLuau = executeLuau,
+	undo = undo,
+	redo = redo,
 }
 ]]></string>
           </Properties>
@@ -1463,11 +1516,14 @@ return {
             <string name="Source"><![CDATA[-- Compiled with roblox-ts v3.0.0
 local TS = require(script.Parent.Parent.Parent.include.RuntimeLib)
 local Utils = TS.import(script, script.Parent.Parent, "Utils")
-local ChangeHistoryService = game:GetService("ChangeHistoryService")
+local Recording = TS.import(script, script.Parent.Parent, "Recording")
 local _binding = Utils
 local getInstanceByPath = _binding.getInstanceByPath
 local convertPropertyValue = _binding.convertPropertyValue
 local evaluateFormula = _binding.evaluateFormula
+local _binding_1 = Recording
+local beginRecording = _binding_1.beginRecording
+local finishRecording = _binding_1.finishRecording
 local function setProperty(requestData)
 	local instancePath = requestData.instancePath
 	local propertyName = requestData.propertyName
@@ -1483,6 +1539,7 @@ local function setProperty(requestData)
 			error = `Instance not found: {instancePath}`,
 		}
 	end
+	local recordingId = beginRecording(`Set {propertyName} property`)
 	local inst = instance
 	local success, result = pcall(function()
 		if propertyName == "Parent" or propertyName == "PrimaryPart" then
@@ -1508,10 +1565,10 @@ local function setProperty(requestData)
 				inst[propertyName] = propertyValue
 			end
 		end
-		ChangeHistoryService:SetWaypoint(`Set {propertyName} property`)
 		return true
 	end)
 	if success then
+		finishRecording(recordingId, true)
 		return {
 			success = true,
 			instancePath = instancePath,
@@ -1520,6 +1577,7 @@ local function setProperty(requestData)
 			message = "Property set successfully",
 		}
 	else
+		finishRecording(recordingId, false)
 		return {
 			error = `Failed to set property: {result}`,
 			instancePath = instancePath,
@@ -1539,6 +1597,7 @@ local function massSetProperty(requestData)
 	local results = {}
 	local successCount = 0
 	local failureCount = 0
+	local recordingId = beginRecording(`Mass set {propertyName} property`)
 	for _, path in paths do
 		local instance = getInstanceByPath(path)
 		if instance then
@@ -1573,9 +1632,7 @@ local function massSetProperty(requestData)
 			table.insert(results, _arg0)
 		end
 	end
-	if successCount > 0 then
-		ChangeHistoryService:SetWaypoint(`Mass set {propertyName} property`)
-	end
+	finishRecording(recordingId, successCount > 0)
 	return {
 		results = results,
 		summary = {
@@ -1643,6 +1700,7 @@ local function setCalculatedProperty(requestData)
 	local results = {}
 	local successCount = 0
 	local failureCount = 0
+	local recordingId = beginRecording(`Set calculated {propertyName} property`)
 	for i = 0, #paths - 1 do
 		local path = paths[i + 1]
 		local instance = getInstanceByPath(path)
@@ -1695,9 +1753,7 @@ local function setCalculatedProperty(requestData)
 			table.insert(results, _arg0)
 		end
 	end
-	if successCount > 0 then
-		ChangeHistoryService:SetWaypoint(`Set calculated {propertyName} property`)
-	end
+	finishRecording(recordingId, successCount > 0)
 	return {
 		results = results,
 		summary = {
@@ -1722,6 +1778,7 @@ local function setRelativeProperty(requestData)
 	local results = {}
 	local successCount = 0
 	local failureCount = 0
+	local recordingId = beginRecording(`Set relative {propertyName} property`)
 	local function applyOp(current, op, val)
 		if op == "add" then
 			return current + val
@@ -1834,9 +1891,7 @@ local function setRelativeProperty(requestData)
 			table.insert(results, _arg0)
 		end
 	end
-	if successCount > 0 then
-		ChangeHistoryService:SetWaypoint(`Set relative {propertyName} property`)
-	end
+	finishRecording(recordingId, successCount > 0)
 	return {
 		results = results,
 		summary = {
@@ -2515,7 +2570,7 @@ return {
             <string name="Source"><![CDATA[-- Compiled with roblox-ts v3.0.0
 local TS = require(script.Parent.Parent.Parent.include.RuntimeLib)
 local Utils = TS.import(script, script.Parent.Parent, "Utils")
-local ChangeHistoryService = game:GetService("ChangeHistoryService")
+local Recording = TS.import(script, script.Parent.Parent, "Recording")
 local ScriptEditorService = game:GetService("ScriptEditorService")
 local _binding = Utils
 local getInstancePath = _binding.getInstancePath
@@ -2523,6 +2578,9 @@ local getInstanceByPath = _binding.getInstanceByPath
 local readScriptSource = _binding.readScriptSource
 local splitLines = _binding.splitLines
 local joinLines = _binding.joinLines
+local _binding_1 = Recording
+local beginRecording = _binding_1.beginRecording
+local finishRecording = _binding_1.finishRecording
 local function normalizeEscapes(s)
 	local result = s
 	result = (string.gsub(result, "\\n", "\n"))
@@ -2678,13 +2736,13 @@ local function setScriptSource(requestData)
 			error = `Instance is not a script-like object: {instance.ClassName}`,
 		}
 	end
+	local recordingId = beginRecording(`Set script source: {instance.Name}`)
 	local sourceToSet = normalizeEscapes(newSource)
 	local updateSuccess, updateResult = pcall(function()
 		local oldSourceLength = #readScriptSource(instance)
 		ScriptEditorService:UpdateSourceAsync(instance, function()
 			return sourceToSet
 		end)
-		ChangeHistoryService:SetWaypoint(`Set script source: {instance.Name}`)
 		return {
 			success = true,
 			instancePath = instancePath,
@@ -2695,12 +2753,12 @@ local function setScriptSource(requestData)
 		}
 	end)
 	if updateSuccess then
+		finishRecording(recordingId, true)
 		return updateResult
 	end
 	local directSuccess, directResult = pcall(function()
 		local oldSource = instance.Source
 		instance.Source = sourceToSet
-		ChangeHistoryService:SetWaypoint(`Set script source: {instance.Name}`)
 		return {
 			success = true,
 			instancePath = instancePath,
@@ -2711,6 +2769,7 @@ local function setScriptSource(requestData)
 		}
 	end)
 	if directSuccess then
+		finishRecording(recordingId, true)
 		return directResult
 	end
 	local replaceSuccess, replaceResult = pcall(function()
@@ -2727,7 +2786,6 @@ local function setScriptSource(requestData)
 		end
 		newScript.Parent = parent
 		instance:Destroy()
-		ChangeHistoryService:SetWaypoint(`Replace script: {name}`)
 		return {
 			success = true,
 			instancePath = getInstancePath(newScript),
@@ -2736,8 +2794,10 @@ local function setScriptSource(requestData)
 		}
 	end)
 	if replaceSuccess then
+		finishRecording(recordingId, true)
 		return replaceResult
 	end
+	finishRecording(recordingId, false)
 	return {
 		error = `Failed to set script source. UpdateSourceAsync failed: {updateResult}. Direct assignment failed: {directResult}. Replace method failed: {replaceResult}`,
 	}
@@ -2764,6 +2824,7 @@ local function editScriptLines(requestData)
 			error = `Instance is not a script-like object: {instance.ClassName}`,
 		}
 	end
+	local recordingId = beginRecording(`Edit script lines {startLine}-{endLine}: {instance.Name}`)
 	local success, result = pcall(function()
 		local lines, hadTrailingNewline = splitLines(readScriptSource(instance))
 		local totalLines = #lines
@@ -2814,7 +2875,6 @@ local function editScriptLines(requestData)
 		ScriptEditorService:UpdateSourceAsync(instance, function()
 			return newSource
 		end)
-		ChangeHistoryService:SetWaypoint(`Edit script lines {startLine}-{endLine}: {instance.Name}`)
 		return {
 			success = true,
 			instancePath = instancePath,
@@ -2829,8 +2889,10 @@ local function editScriptLines(requestData)
 		}
 	end)
 	if success then
+		finishRecording(recordingId, true)
 		return result
 	end
+	finishRecording(recordingId, false)
 	return {
 		error = `Failed to edit script lines: {result}`,
 	}
@@ -2860,6 +2922,7 @@ local function insertScriptLines(requestData)
 			error = `Instance is not a script-like object: {instance.ClassName}`,
 		}
 	end
+	local recordingId = beginRecording(`Insert script lines after line {afterLine}: {instance.Name}`)
 	local success, result = pcall(function()
 		local lines, hadTrailingNewline = splitLines(readScriptSource(instance))
 		local totalLines = #lines
@@ -2907,7 +2970,6 @@ local function insertScriptLines(requestData)
 		ScriptEditorService:UpdateSourceAsync(instance, function()
 			return newSource
 		end)
-		ChangeHistoryService:SetWaypoint(`Insert script lines after line {afterLine}: {instance.Name}`)
 		return {
 			success = true,
 			instancePath = instancePath,
@@ -2918,8 +2980,10 @@ local function insertScriptLines(requestData)
 		}
 	end)
 	if success then
+		finishRecording(recordingId, true)
 		return result
 	end
+	finishRecording(recordingId, false)
 	return {
 		error = `Failed to insert script lines: {result}`,
 	}
@@ -2944,6 +3008,7 @@ local function deleteScriptLines(requestData)
 			error = `Instance is not a script-like object: {instance.ClassName}`,
 		}
 	end
+	local recordingId = beginRecording(`Delete script lines {startLine}-{endLine}: {instance.Name}`)
 	local success, result = pcall(function()
 		local lines, hadTrailingNewline = splitLines(readScriptSource(instance))
 		local totalLines = #lines
@@ -2990,7 +3055,6 @@ local function deleteScriptLines(requestData)
 		ScriptEditorService:UpdateSourceAsync(instance, function()
 			return newSource
 		end)
-		ChangeHistoryService:SetWaypoint(`Delete script lines {startLine}-{endLine}: {instance.Name}`)
 		return {
 			success = true,
 			instancePath = instancePath,
@@ -3004,8 +3068,10 @@ local function deleteScriptLines(requestData)
 		}
 	end)
 	if success then
+		finishRecording(recordingId, true)
 		return result
 	end
+	finishRecording(recordingId, false)
 	return {
 		error = `Failed to delete script lines: {result}`,
 	}
@@ -3171,6 +3237,36 @@ return {
       </Item>
       <Item class="ModuleScript" referent="10">
         <Properties>
+          <string name="Name">Recording</string>
+          <string name="Source"><![CDATA[-- Compiled with roblox-ts v3.0.0
+local ChangeHistoryService = game:GetService("ChangeHistoryService")
+local function beginRecording(actionName)
+	local success, result = pcall(function()
+		return ChangeHistoryService:TryBeginRecording(`MCP: {actionName}`)
+	end)
+	if success then
+		return result
+	end
+	return nil
+end
+local function finishRecording(recordingId, shouldCommit)
+	if recordingId == nil then
+		return nil
+	end
+	local operation = if shouldCommit then Enum.FinishRecordingOperation.Commit else Enum.FinishRecordingOperation.Cancel
+	pcall(function()
+		ChangeHistoryService:FinishRecording(recordingId, operation)
+	end)
+end
+return {
+	beginRecording = beginRecording,
+	finishRecording = finishRecording,
+}
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="11">
+        <Properties>
           <string name="Name">State</string>
           <string name="Source"><![CDATA[-- Compiled with roblox-ts v3.0.0
 local CURRENT_VERSION = "2.3.0"
@@ -3260,7 +3356,7 @@ return {
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="11">
+      <Item class="ModuleScript" referent="12">
         <Properties>
           <string name="Name">UI</string>
           <string name="Source"><![CDATA[-- Compiled with roblox-ts v3.0.0
@@ -3888,7 +3984,7 @@ return {
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="12">
+      <Item class="ModuleScript" referent="13">
         <Properties>
           <string name="Name">Utils</string>
           <string name="Source"><![CDATA[-- Compiled with roblox-ts v3.0.0
@@ -4422,11 +4518,11 @@ return {
         </Properties>
       </Item>
     </Item>
-    <Item class="Folder" referent="16">
+    <Item class="Folder" referent="17">
       <Properties>
         <string name="Name">include</string>
       </Properties>
-      <Item class="ModuleScript" referent="13">
+      <Item class="ModuleScript" referent="14">
         <Properties>
           <string name="Name">Promise</string>
           <string name="Source"><![CDATA[--[[
@@ -6500,7 +6596,7 @@ return Promise
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="14">
+      <Item class="ModuleScript" referent="15">
         <Properties>
           <string name="Name">RuntimeLib</string>
           <string name="Source"><![CDATA[local Promise = require(script.Parent.Promise)
@@ -6767,15 +6863,15 @@ return TS
         </Properties>
       </Item>
     </Item>
-    <Item class="Folder" referent="17">
+    <Item class="Folder" referent="18">
       <Properties>
         <string name="Name">node_modules</string>
       </Properties>
-      <Item class="Folder" referent="18">
+      <Item class="Folder" referent="19">
         <Properties>
           <string name="Name">@rbxts</string>
         </Properties>
-      <Item class="ModuleScript" referent="15">
+      <Item class="ModuleScript" referent="16">
         <Properties>
           <string name="Name">services</string>
           <string name="Source"><![CDATA[return setmetatable({}, {

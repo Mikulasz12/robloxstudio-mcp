@@ -189,6 +189,78 @@ describe('HTTP Server', () => {
     });
   });
 
+  describe('Proxy Endpoint', () => {
+    test('should require endpoint for proxy requests', async () => {
+      const response = await request(app)
+        .post('/proxy')
+        .send({ data: { test: true } })
+        .expect(400);
+
+      expect(response.body).toEqual({ error: 'endpoint is required' });
+    });
+
+    test('should forward proxied request through pending queue', async () => {
+      const proxyRequest = new Promise<request.Response>((resolve, reject) => {
+        request(app)
+          .post('/proxy')
+          .send({
+            endpoint: '/api/proxy-test',
+            data: { value: 123 }
+          })
+          .end((error, response) => {
+            if (error) {
+              reject(error);
+              return;
+            }
+            resolve(response);
+          });
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      const pendingRequest = bridge.getPendingRequest();
+      expect(pendingRequest).toBeTruthy();
+      expect(pendingRequest?.request).toEqual({
+        endpoint: '/api/proxy-test',
+        data: { value: 123 }
+      });
+
+      await request(app)
+        .post('/response')
+        .send({
+          requestId: pendingRequest!.requestId,
+          response: { ok: true }
+        })
+        .expect(200);
+
+      const response = await proxyRequest;
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual({ response: { ok: true } });
+    });
+  });
+
+  describe('MCP Route Forwarding', () => {
+    test('should forward start and end lines for get_script_source', async () => {
+      const getScriptSourceSpy = jest
+        .spyOn(tools, 'getScriptSource')
+        .mockResolvedValue({ content: [{ type: 'text', text: '{}' }] } as any);
+
+      await request(app)
+        .post('/mcp/get_script_source')
+        .send({
+          instancePath: 'game.ServerScriptService.MainScript',
+          startLine: 10,
+          endLine: 25
+        })
+        .expect(200);
+
+      expect(getScriptSourceSpy).toHaveBeenCalledWith(
+        'game.ServerScriptService.MainScript',
+        10,
+        25
+      );
+    });
+  });
+
   describe('MCP Server State Management', () => {
     test('should track MCP server activity', async () => {
       app.setMCPServerActive(true);

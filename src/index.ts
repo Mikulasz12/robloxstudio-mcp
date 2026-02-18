@@ -2,14 +2,25 @@
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { createMcpExpressApp } from '@modelcontextprotocol/sdk/server/express.js';
 import {
   CallToolRequestSchema,
   ErrorCode,
+  ListResourceTemplatesRequestSchema,
+  ListResourcesRequestSchema,
   ListToolsRequestSchema,
   McpError,
+  ReadResourceRequestSchema,
+  isInitializeRequest,
 } from '@modelcontextprotocol/sdk/types.js';
+import { createServer as createNodeHttpServer } from 'http';
+import { randomUUID } from 'crypto';
 import { createRequire } from 'module';
 import { createHttpServer } from './http-server.js';
+import { listenWithRetry } from './http-listener.js';
+import { ProxyBridgeService } from './proxy-bridge-service.js';
+import { attachSessionCloseHandler } from './streamable-session-lifecycle.js';
 import { RobloxStudioTools } from './tools/index.js';
 import { BridgeService } from './bridge-service.js';
 
@@ -21,7 +32,7 @@ class RobloxStudioMCPServer {
   private tools: RobloxStudioTools;
   private bridge: BridgeService;
 
-  constructor() {
+  constructor(sharedBridge?: BridgeService) {
     this.server = new Server(
       {
         name: 'robloxstudio-mcp',
@@ -29,14 +40,37 @@ class RobloxStudioMCPServer {
       },
       {
         capabilities: {
+          resources: {},
           tools: {},
         },
       }
     );
 
-    this.bridge = new BridgeService();
+    this.bridge = sharedBridge ?? new BridgeService();
     this.tools = new RobloxStudioTools(this.bridge);
+    this.setupResourceHandlers();
     this.setupToolHandlers();
+  }
+
+  private setupResourceHandlers() {
+    this.server.setRequestHandler(ListResourcesRequestSchema, async () => {
+      return {
+        resources: [],
+      };
+    });
+
+    this.server.setRequestHandler(ListResourceTemplatesRequestSchema, async () => {
+      return {
+        resourceTemplates: [],
+      };
+    });
+
+    this.server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
+      throw new McpError(
+        ErrorCode.InvalidParams,
+        `This server does not expose readable resources: ${request.params.uri}`
+      );
+    });
   }
 
   private setupToolHandlers() {
@@ -897,6 +931,22 @@ class RobloxStudioMCPServer {
               type: 'object',
               properties: {}
             }
+          },
+          {
+            name: 'undo',
+            description: 'Undo the last committed studio change via ChangeHistoryService.',
+            inputSchema: {
+              type: 'object',
+              properties: {}
+            }
+          },
+          {
+            name: 'redo',
+            description: 'Redo the last undone studio change via ChangeHistoryService.',
+            inputSchema: {
+              type: 'object',
+              properties: {}
+            }
           }
         ]
       };
@@ -1004,6 +1054,10 @@ class RobloxStudioMCPServer {
             return await this.tools.stopPlaytest();
           case 'get_playtest_output':
             return await this.tools.getPlaytestOutput();
+          case 'undo':
+            return await this.tools.undo();
+          case 'redo':
+            return await this.tools.redo();
 
           default:
             throw new McpError(
@@ -1020,90 +1074,73 @@ class RobloxStudioMCPServer {
     });
   }
 
-  async run() {
-    const basePort = process.env.ROBLOX_STUDIO_PORT ? parseInt(process.env.ROBLOX_STUDIO_PORT) : 58741;
-    const maxPort = basePort + 4;
+  private parseEnvNumber(name: string, fallback: number) {
+    const raw = process.env[name];
+    if (!raw) return fallback;
+
+    const value = parseInt(raw, 10);
+    return Number.isFinite(value) ? value : fallback;
+  }
+
+  private getTransportMode(): 'stdio' | 'streamable-http' {
+    const argTransport = process.argv.find((arg) => arg.startsWith('--transport='));
+    const argMode = argTransport ? argTransport.split('=')[1] : undefined;
+
+    if (process.argv.includes('--streamable-http') || argMode === 'streamable-http' || argMode === 'http') {
+      return 'streamable-http';
+    }
+
+    const envMode = process.env.MCP_TRANSPORT?.toLowerCase();
+    if (envMode === 'streamable-http' || envMode === 'http') {
+      return 'streamable-http';
+    }
+
+    return 'stdio';
+  }
+
+  private async setupBridgeServer() {
+    const port = this.parseEnvNumber('ROBLOX_STUDIO_PORT', 58741);
+    const maxPortAttempts = this.parseEnvNumber('ROBLOX_STUDIO_PORT_RETRY_COUNT', 1);
     const host = process.env.ROBLOX_STUDIO_HOST || '0.0.0.0';
-    const httpServer = createHttpServer(this.tools, this.bridge);
+    const httpApp = createHttpServer(this.tools, this.bridge);
 
-    let boundPort = 0;
-    for (let port = basePort; port <= maxPort; port++) {
-      try {
-        await new Promise<void>((resolve, reject) => {
-          const onError = (err: NodeJS.ErrnoException) => {
-            if (err.code === 'EADDRINUSE') {
-              httpServer.removeListener('error', onError);
-              reject(err);
-            } else {
-              reject(err);
-            }
-          };
-          httpServer.once('error', onError);
-          httpServer.listen(port, host, () => {
-            httpServer.removeListener('error', onError);
-            boundPort = port;
-            console.error(`HTTP server listening on ${host}:${port} for Studio plugin`);
-            resolve();
-          });
-        });
-        break;
-      } catch (err: any) {
-        if (err.code === 'EADDRINUSE') {
-          console.error(`Port ${port} in use, trying next...`);
-          if (port === maxPort) {
-            throw new Error(`All ports ${basePort}-${maxPort} are in use. Stop some MCP server instances and retry.`);
-          }
-          continue;
-        }
-        throw err;
+    let bridgeMode: 'primary' | 'proxy' = 'primary';
+
+    try {
+      const { port: boundPort } = await listenWithRetry(
+        httpApp,
+        host,
+        port,
+        maxPortAttempts,
+        (message) => console.error(message)
+      );
+      console.error(`HTTP server listening on ${host}:${boundPort} for Studio plugin`);
+    } catch (error) {
+      const err = error as NodeJS.ErrnoException;
+      if (err.code !== 'EADDRINUSE') {
+        throw error;
       }
+
+      const proxyHost = process.env.ROBLOX_STUDIO_PROXY_HOST || '127.0.0.1';
+      const proxyBaseUrl = `http://${proxyHost}:${port}`;
+      bridgeMode = 'proxy';
+      this.bridge = new ProxyBridgeService(proxyBaseUrl);
+      this.tools = new RobloxStudioTools(this.bridge);
+      console.error(`Port ${port} is busy. Running in proxy mode via ${proxyBaseUrl}`);
     }
 
-    const LEGACY_PORT = 3002;
-    let legacyServer: ReturnType<typeof createHttpServer> | undefined;
-    if (boundPort !== LEGACY_PORT) {
-      const legacy = createHttpServer(this.tools, this.bridge);
-      legacyServer = legacy;
-      try {
-        await new Promise<void>((resolve, reject) => {
-          const onError = (err: NodeJS.ErrnoException) => {
-            if (err.code === 'EADDRINUSE') {
-              legacy.removeListener('error', onError);
-              reject(err);
-            } else {
-              reject(err);
-            }
-          };
-          legacy.once('error', onError);
-          legacy.listen(LEGACY_PORT, host, () => {
-            legacy.removeListener('error', onError);
-            console.error(`Legacy HTTP server also listening on ${host}:${LEGACY_PORT} for old plugins`);
-            resolve();
-          });
-        });
+    return { httpApp, bridgeMode };
+  }
 
-        (legacy as any).setMCPServerActive(true);
-      } catch {
-
-        console.error(`Legacy port ${LEGACY_PORT} in use, skipping backward-compat listener`);
-      }
-    }
-
-
-    const transport = new StdioServerTransport();
-    await this.server.connect(transport);
-    console.error('Roblox Studio MCP server running on stdio');
-
-    (httpServer as any).setMCPServerActive(true);
+  private startPrimaryBridgeMonitoring(httpApp: any) {
+    httpApp.setMCPServerActive(true);
     console.error('MCP server marked as active');
-
     console.error('Waiting for Studio plugin to connect...');
 
     setInterval(() => {
-      (httpServer as any).trackMCPActivity();
-      if (legacyServer) (legacyServer as any).trackMCPActivity();
-      const pluginConnected = (httpServer as any).isPluginConnected();
-      const mcpActive = (httpServer as any).isMCPServerActive();
+      httpApp.trackMCPActivity();
+      const pluginConnected = httpApp.isPluginConnected();
+      const mcpActive = httpApp.isMCPServerActive();
 
       if (pluginConnected && mcpActive) {
       } else if (pluginConnected && !mcpActive) {
@@ -1118,6 +1155,141 @@ class RobloxStudioMCPServer {
     setInterval(() => {
       this.bridge.cleanupOldRequests();
     }, 5000);
+  }
+
+  async connectTransport(transport: any) {
+    await this.server.connect(transport);
+  }
+
+  async close() {
+    await this.server.close();
+  }
+
+  private async runStdioMode() {
+    const transport = new StdioServerTransport();
+    await this.server.connect(transport);
+    console.error('Roblox Studio MCP server running on stdio');
+  }
+
+  private async runStreamableHttpMode(httpApp: any, bridgeMode: 'primary' | 'proxy') {
+    const mcpHost = process.env.MCP_HTTP_HOST || '127.0.0.1';
+    const mcpPort = this.parseEnvNumber('MCP_HTTP_PORT', 59000);
+    const mcpPath = process.env.MCP_HTTP_PATH || '/mcp';
+    const mcpApp = createMcpExpressApp({ host: mcpHost });
+
+    type SessionContext = {
+      server: RobloxStudioMCPServer;
+      transport: StreamableHTTPServerTransport;
+    };
+
+    const sessions = new Map<string, SessionContext>();
+
+    mcpApp.all(mcpPath, async (req, res) => {
+      if (bridgeMode === 'primary') {
+        httpApp.trackMCPActivity();
+      }
+
+      try {
+        const sessionHeader = req.headers['mcp-session-id'];
+        const sessionId = Array.isArray(sessionHeader) ? sessionHeader[0] : sessionHeader;
+        let context = sessionId ? sessions.get(sessionId) : undefined;
+
+        if (!context) {
+          if (sessionId) {
+            res.status(404).json({
+              jsonrpc: '2.0',
+              error: {
+                code: -32001,
+                message: 'Session not found',
+              },
+              id: null,
+            });
+            return;
+          }
+
+          if (req.method !== 'POST' || !isInitializeRequest(req.body)) {
+            res.status(400).json({
+              jsonrpc: '2.0',
+              error: {
+                code: -32000,
+                message: 'Bad Request: No valid session ID provided',
+              },
+              id: null,
+            });
+            return;
+          }
+
+          const sessionServer = new RobloxStudioMCPServer(this.bridge);
+          const transport = new StreamableHTTPServerTransport({
+            sessionIdGenerator: () => randomUUID(),
+            enableJsonResponse: true,
+            onsessioninitialized: (createdSessionId) => {
+              sessions.set(createdSessionId, contextForSession);
+            },
+          });
+
+          const contextForSession: SessionContext = { server: sessionServer, transport };
+          attachSessionCloseHandler(sessions, contextForSession);
+
+          transport.onerror = (error) => {
+            console.error(`MCP streamable transport error: ${error.message}`);
+          };
+
+          await sessionServer.connectTransport(transport);
+          context = contextForSession;
+        }
+
+        await context.transport.handleRequest(req, res, req.body);
+      } catch (error) {
+        if (!res.headersSent) {
+          res.status(500).json({
+            jsonrpc: '2.0',
+            error: {
+              code: -32603,
+              message: 'Internal server error',
+            },
+            id: null,
+          });
+        }
+        console.error(`MCP HTTP request failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    });
+
+    const mcpHttpServer = createNodeHttpServer(mcpApp);
+    await new Promise<void>((resolve, reject) => {
+      const onError = (error: NodeJS.ErrnoException) => {
+        mcpHttpServer.removeListener('listening', onListening);
+        reject(error);
+      };
+
+      const onListening = () => {
+        mcpHttpServer.removeListener('error', onError);
+        resolve();
+      };
+
+      mcpHttpServer.once('error', onError);
+      mcpHttpServer.once('listening', onListening);
+      mcpHttpServer.listen(mcpPort, mcpHost);
+    });
+
+    console.error(`Roblox Studio MCP server running on streamable HTTP: http://${mcpHost}:${mcpPort}${mcpPath}`);
+  }
+
+  async run() {
+    const { httpApp, bridgeMode } = await this.setupBridgeServer();
+    const transportMode = this.getTransportMode();
+
+    if (transportMode === 'streamable-http') {
+      await this.runStreamableHttpMode(httpApp, bridgeMode);
+    } else {
+      await this.runStdioMode();
+    }
+
+    if (bridgeMode === 'primary') {
+      this.startPrimaryBridgeMonitoring(httpApp);
+    } else {
+      console.error('Proxy mode active. Forwarding Studio tool requests to primary bridge instance.');
+    }
   }
 }
 
