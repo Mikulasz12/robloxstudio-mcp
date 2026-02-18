@@ -27,10 +27,25 @@ import { BridgeService } from './bridge-service.js';
 const require = createRequire(import.meta.url);
 const { version: VERSION } = require('../package.json');
 
+type BridgeHttpApp = ReturnType<typeof createHttpServer> & {
+  isPluginConnected: () => boolean;
+  setMCPServerActive: (active: boolean) => void;
+  isMCPServerActive: () => boolean;
+  trackMCPActivity: () => void;
+  setConnectionMode: (mode: 'direct' | 'proxying') => void;
+};
+
 class RobloxStudioMCPServer {
   private server: Server;
   private tools: RobloxStudioTools;
   private bridge: BridgeService;
+  private bridgeMode: 'primary' | 'proxy' = 'primary';
+  private httpApp?: BridgeHttpApp;
+  private bridgeStatusInterval?: ReturnType<typeof setInterval>;
+  private bridgeCleanupInterval?: ReturnType<typeof setInterval>;
+  private proxyPromotionInterval?: ReturnType<typeof setInterval>;
+  private isPromotionInFlight = false;
+  private readonly streamableSessionServers = new Set<RobloxStudioMCPServer>();
 
   constructor(sharedBridge?: BridgeService) {
     this.server = new Server(
@@ -1102,9 +1117,9 @@ class RobloxStudioMCPServer {
     const port = this.parseEnvNumber('ROBLOX_STUDIO_PORT', 58741);
     const maxPortAttempts = this.parseEnvNumber('ROBLOX_STUDIO_PORT_RETRY_COUNT', 1);
     const host = process.env.ROBLOX_STUDIO_HOST || '0.0.0.0';
-    const httpApp = createHttpServer(this.tools, this.bridge);
-
-    let bridgeMode: 'primary' | 'proxy' = 'primary';
+    const httpApp = createHttpServer(this.tools, this.bridge) as BridgeHttpApp;
+    this.httpApp = httpApp;
+    this.bridgeMode = 'primary';
 
     try {
       const { port: boundPort } = await listenWithRetry(
@@ -1123,21 +1138,26 @@ class RobloxStudioMCPServer {
 
       const proxyHost = process.env.ROBLOX_STUDIO_PROXY_HOST || '127.0.0.1';
       const proxyBaseUrl = `http://${proxyHost}:${port}`;
-      bridgeMode = 'proxy';
+      this.bridgeMode = 'proxy';
       this.bridge = new ProxyBridgeService(proxyBaseUrl);
       this.tools = new RobloxStudioTools(this.bridge);
+      httpApp.setConnectionMode('proxying');
       console.error(`Port ${port} is busy. Running in proxy mode via ${proxyBaseUrl}`);
     }
 
-    return { httpApp, bridgeMode };
+    return { host, port, maxPortAttempts };
   }
 
-  private startPrimaryBridgeMonitoring(httpApp: any) {
+  private startPrimaryBridgeMonitoring(httpApp: BridgeHttpApp) {
     httpApp.setMCPServerActive(true);
+    httpApp.setConnectionMode('direct');
     console.error('MCP server marked as active');
     console.error('Waiting for Studio plugin to connect...');
 
-    setInterval(() => {
+    if (this.bridgeStatusInterval) {
+      clearInterval(this.bridgeStatusInterval);
+    }
+    this.bridgeStatusInterval = setInterval(() => {
       httpApp.trackMCPActivity();
       const pluginConnected = httpApp.isPluginConnected();
       const mcpActive = httpApp.isMCPServerActive();
@@ -1152,9 +1172,81 @@ class RobloxStudioMCPServer {
       }
     }, 5000);
 
-    setInterval(() => {
+    if (this.bridgeCleanupInterval) {
+      clearInterval(this.bridgeCleanupInterval);
+    }
+    this.bridgeCleanupInterval = setInterval(() => {
       this.bridge.cleanupOldRequests();
     }, 5000);
+  }
+
+  private syncBridgeAcrossSessions(bridge: BridgeService) {
+    this.bridge = bridge;
+    this.tools = new RobloxStudioTools(bridge);
+    for (const sessionServer of this.streamableSessionServers) {
+      sessionServer.bridge = bridge;
+      sessionServer.tools = new RobloxStudioTools(bridge);
+    }
+  }
+
+  private getProxyPromotionIntervalMs() {
+    const configured = this.parseEnvNumber('ROBLOX_STUDIO_PROXY_PROMOTION_INTERVAL_MS', 5000);
+    return configured > 0 ? configured : 5000;
+  }
+
+  private startProxyPromotionMonitoring(host: string, port: number) {
+    if (this.proxyPromotionInterval) {
+      clearInterval(this.proxyPromotionInterval);
+    }
+
+    const intervalMs = this.getProxyPromotionIntervalMs();
+    this.proxyPromotionInterval = setInterval(() => {
+      void this.tryPromoteProxyToPrimary(host, port);
+    }, intervalMs);
+  }
+
+  private async tryPromoteProxyToPrimary(host: string, port: number) {
+    if (this.bridgeMode !== 'proxy' || this.isPromotionInFlight) {
+      return;
+    }
+
+    this.isPromotionInFlight = true;
+    try {
+      const nextBridge = new BridgeService();
+      const nextTools = new RobloxStudioTools(nextBridge);
+      const nextHttpApp = createHttpServer(nextTools, nextBridge) as BridgeHttpApp;
+      const { port: boundPort } = await listenWithRetry(
+        nextHttpApp,
+        host,
+        port,
+        1,
+        () => {
+          return;
+        }
+      );
+
+      this.syncBridgeAcrossSessions(nextBridge);
+      this.httpApp = nextHttpApp;
+      this.bridgeMode = 'primary';
+      this.stopProxyPromotionMonitoring();
+      this.startPrimaryBridgeMonitoring(nextHttpApp);
+      console.error(`Proxy instance promoted to primary bridge on ${host}:${boundPort}`);
+    } catch (error) {
+      const err = error as NodeJS.ErrnoException;
+      if (err.code !== 'EADDRINUSE') {
+        console.error(`Failed to probe bridge promotion: ${err.message ?? String(error)}`);
+      }
+    } finally {
+      this.isPromotionInFlight = false;
+    }
+  }
+
+  private stopProxyPromotionMonitoring() {
+    if (!this.proxyPromotionInterval) {
+      return;
+    }
+    clearInterval(this.proxyPromotionInterval);
+    this.proxyPromotionInterval = undefined;
   }
 
   async connectTransport(transport: any) {
@@ -1171,7 +1263,7 @@ class RobloxStudioMCPServer {
     console.error('Roblox Studio MCP server running on stdio');
   }
 
-  private async runStreamableHttpMode(httpApp: any, bridgeMode: 'primary' | 'proxy') {
+  private async runStreamableHttpMode() {
     const mcpHost = process.env.MCP_HTTP_HOST || '127.0.0.1';
     const mcpPort = this.parseEnvNumber('MCP_HTTP_PORT', 59000);
     const mcpPath = process.env.MCP_HTTP_PATH || '/mcp';
@@ -1185,8 +1277,8 @@ class RobloxStudioMCPServer {
     const sessions = new Map<string, SessionContext>();
 
     mcpApp.all(mcpPath, async (req, res) => {
-      if (bridgeMode === 'primary') {
-        httpApp.trackMCPActivity();
+      if (this.bridgeMode === 'primary') {
+        this.httpApp?.trackMCPActivity();
       }
 
       try {
@@ -1220,6 +1312,7 @@ class RobloxStudioMCPServer {
           }
 
           const sessionServer = new RobloxStudioMCPServer(this.bridge);
+          this.streamableSessionServers.add(sessionServer);
           const transport = new StreamableHTTPServerTransport({
             sessionIdGenerator: () => randomUUID(),
             enableJsonResponse: true,
@@ -1230,6 +1323,11 @@ class RobloxStudioMCPServer {
 
           const contextForSession: SessionContext = { server: sessionServer, transport };
           attachSessionCloseHandler(sessions, contextForSession);
+          const previousOnClose = transport.onclose;
+          transport.onclose = () => {
+            this.streamableSessionServers.delete(sessionServer);
+            previousOnClose?.();
+          };
 
           transport.onerror = (error) => {
             console.error(`MCP streamable transport error: ${error.message}`);
@@ -1276,19 +1374,20 @@ class RobloxStudioMCPServer {
   }
 
   async run() {
-    const { httpApp, bridgeMode } = await this.setupBridgeServer();
+    const { host, port } = await this.setupBridgeServer();
     const transportMode = this.getTransportMode();
 
     if (transportMode === 'streamable-http') {
-      await this.runStreamableHttpMode(httpApp, bridgeMode);
+      await this.runStreamableHttpMode();
     } else {
       await this.runStdioMode();
     }
 
-    if (bridgeMode === 'primary') {
-      this.startPrimaryBridgeMonitoring(httpApp);
+    if (this.bridgeMode === 'primary' && this.httpApp) {
+      this.startPrimaryBridgeMonitoring(this.httpApp);
     } else {
       console.error('Proxy mode active. Forwarding Studio tool requests to primary bridge instance.');
+      this.startProxyPromotionMonitoring(host, port);
     }
   }
 }

@@ -17,6 +17,14 @@ describe('ProxyBridgeService', () => {
 
     const bridge = new ProxyBridgeService('http://127.0.0.1:58741');
     await expect(bridge.sendRequest('/api/test', { value: 1 })).resolves.toEqual({ ok: true });
+
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    const fetchOptions = (global.fetch as jest.Mock).mock.calls[0][1] as RequestInit;
+    const requestBody = JSON.parse(String(fetchOptions.body));
+    expect(requestBody.endpoint).toBe('/api/test');
+    expect(requestBody.data).toEqual({ value: 1 });
+    expect(typeof requestBody.proxyInstanceId).toBe('string');
+    expect(requestBody.proxyInstanceId.length).toBeGreaterThan(0);
   });
 
   test('maps aborts to Request timeout', async () => {

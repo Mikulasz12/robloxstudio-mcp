@@ -14,7 +14,7 @@
   ],
   "scripts": {
     "build": "tsc",
-    "build:plugin": "node scripts/build-plugin.mjs",
+    "build:plugin": "npm --prefix studio-plugin run build && node scripts/build-plugin.mjs",
     "build:all": "npm run build && npm run build:plugin",
     "dev": "tsx src/index.ts",
     "dev:http": "tsx src/index.ts --streamable-http",

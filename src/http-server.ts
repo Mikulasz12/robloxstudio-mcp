@@ -3,13 +3,30 @@ import cors from 'cors';
 import { RobloxStudioTools } from './tools/index.js';
 import { BridgeService } from './bridge-service.js';
 
+interface StudioIdentity {
+  studioInstanceId?: string;
+  placeId?: string;
+  placeName?: string;
+}
+
+interface BoundStudioIdentity {
+  studioInstanceId: string;
+  placeId?: string;
+  placeName?: string;
+}
+
 export function createHttpServer(tools: RobloxStudioTools, bridge: BridgeService) {
   const app = express();
+  type ConnectionMode = 'direct' | 'proxying';
+  const LEGACY_PROXY_INSTANCE_ID = '__legacy_proxy_instance__';
   let pluginConnected = false;
   let mcpServerActive = false;
   let lastMCPActivity = 0;
   let mcpServerStartTime = 0;
   let lastPluginActivity = 0;
+  let connectionMode: ConnectionMode = 'direct';
+  let boundStudioIdentity: BoundStudioIdentity | undefined;
+  const proxyInstanceIds = new Set<string>();
 
 
   const setMCPServerActive = (active: boolean) => {
@@ -41,6 +58,95 @@ export function createHttpServer(tools: RobloxStudioTools, bridge: BridgeService
     return pluginConnected && (Date.now() - lastPluginActivity < 10000);
   };
 
+  const getConnectionMode = () => connectionMode;
+
+  const setConnectionMode = (mode: ConnectionMode) => {
+    connectionMode = mode;
+    if (mode === 'direct') {
+      proxyInstanceIds.clear();
+    }
+  };
+
+  const getProxyInstanceIdValue = (value: unknown): string | undefined => {
+    if (typeof value !== 'string') return undefined;
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : undefined;
+  };
+
+  const trackProxyInstance = (proxyInstanceId?: string) => {
+    if (connectionMode !== 'proxying') {
+      return;
+    }
+    proxyInstanceIds.add(proxyInstanceId ?? LEGACY_PROXY_INSTANCE_ID);
+  };
+
+  const getProxyInstanceCount = () => {
+    if (connectionMode !== 'proxying') {
+      return 0;
+    }
+    return proxyInstanceIds.size > 0 ? proxyInstanceIds.size : 1;
+  };
+
+  const getIdentityValue = (value: unknown): string | undefined => {
+    const raw = Array.isArray(value) ? value[0] : value;
+    if (typeof raw !== 'string') return undefined;
+    const trimmed = raw.trim();
+    return trimmed.length > 0 ? trimmed : undefined;
+  };
+
+  const extractStudioIdentity = (req: express.Request): StudioIdentity => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const query = (req.query ?? {}) as Record<string, unknown>;
+
+    const studioInstanceId = getIdentityValue(body.studioInstanceId) ?? getIdentityValue(query.studioInstanceId);
+    const placeId = getIdentityValue(body.placeId) ?? getIdentityValue(query.placeId);
+    const placeName = getIdentityValue(body.placeName) ?? getIdentityValue(query.placeName);
+
+    return {
+      studioInstanceId,
+      placeId,
+      placeName,
+    };
+  };
+
+  const sendStudioMismatch = (res: express.Response, incoming: StudioIdentity) => {
+    res.status(409).json({
+      error: 'Studio instance mismatch',
+      code: 'STUDIO_INSTANCE_MISMATCH',
+      message: 'This MCP bridge is already bound to another Studio instance. Connect this plugin to the matching bridge port.',
+      expected: boundStudioIdentity,
+      got: incoming,
+    });
+  };
+
+  const enforceStudioBinding = (req: express.Request, res: express.Response): StudioIdentity | null => {
+    const incomingIdentity = extractStudioIdentity(req);
+    const incomingId = incomingIdentity.studioInstanceId;
+
+    // Keep backwards compatibility for older plugin builds that don't send identity.
+    if (!incomingId) {
+      return incomingIdentity;
+    }
+
+    if (!boundStudioIdentity) {
+      boundStudioIdentity = {
+        studioInstanceId: incomingId,
+        placeId: incomingIdentity.placeId,
+        placeName: incomingIdentity.placeName,
+      };
+      return incomingIdentity;
+    }
+
+    if (boundStudioIdentity.studioInstanceId !== incomingId) {
+      sendStudioMismatch(res, incomingIdentity);
+      return null;
+    }
+
+    if (incomingIdentity.placeId) boundStudioIdentity.placeId = incomingIdentity.placeId;
+    if (incomingIdentity.placeName) boundStudioIdentity.placeName = incomingIdentity.placeName;
+    return incomingIdentity;
+  };
+
   app.use(cors());
   app.use(express.json({ limit: '50mb' }));
   app.use(express.urlencoded({ limit: '50mb', extended: true }));
@@ -52,12 +158,16 @@ export function createHttpServer(tools: RobloxStudioTools, bridge: BridgeService
       service: 'robloxstudio-mcp',
       pluginConnected,
       mcpServerActive: isMCPServerActive(),
+      connectionMode: getConnectionMode(),
+      proxyInstanceCount: getProxyInstanceCount(),
       uptime: mcpServerActive ? Date.now() - mcpServerStartTime : 0
     });
   });
 
 
   app.post('/ready', (req, res) => {
+    const identity = enforceStudioBinding(req, res);
+    if (!identity) return;
 
 
     bridge.clearAllPendingRequests();
@@ -68,9 +178,15 @@ export function createHttpServer(tools: RobloxStudioTools, bridge: BridgeService
 
 
   app.post('/disconnect', (req, res) => {
+    const identity = enforceStudioBinding(req, res);
+    if (!identity) return;
+
     pluginConnected = false;
 
     bridge.clearAllPendingRequests();
+    if (!identity.studioInstanceId || boundStudioIdentity?.studioInstanceId === identity.studioInstanceId) {
+      boundStudioIdentity = undefined;
+    }
     res.json({ success: true });
   });
 
@@ -79,6 +195,9 @@ export function createHttpServer(tools: RobloxStudioTools, bridge: BridgeService
     res.json({
       pluginConnected: isPluginConnected(),
       mcpServerActive: isMCPServerActive(),
+      connectionMode: getConnectionMode(),
+      proxyInstanceCount: getProxyInstanceCount(),
+      boundStudio: boundStudioIdentity ?? null,
       lastMCPActivity,
       uptime: mcpServerActive ? Date.now() - mcpServerStartTime : 0
     });
@@ -86,6 +205,8 @@ export function createHttpServer(tools: RobloxStudioTools, bridge: BridgeService
 
 
   app.get('/poll', (req, res) => {
+    const identity = enforceStudioBinding(req, res);
+    if (!identity) return;
 
     if (!pluginConnected) {
       pluginConnected = true;
@@ -97,6 +218,8 @@ export function createHttpServer(tools: RobloxStudioTools, bridge: BridgeService
         error: 'MCP server not connected',
         pluginConnected: true,
         mcpConnected: false,
+        connectionMode: getConnectionMode(),
+        proxyInstanceCount: getProxyInstanceCount(),
         request: null
       });
       return;
@@ -108,19 +231,26 @@ export function createHttpServer(tools: RobloxStudioTools, bridge: BridgeService
         request: pendingRequest.request,
         requestId: pendingRequest.requestId,
         mcpConnected: true,
-        pluginConnected: true
+        pluginConnected: true,
+        connectionMode: getConnectionMode(),
+        proxyInstanceCount: getProxyInstanceCount()
       });
     } else {
       res.json({
         request: null,
         mcpConnected: true,
-        pluginConnected: true
+        pluginConnected: true,
+        connectionMode: getConnectionMode(),
+        proxyInstanceCount: getProxyInstanceCount()
       });
     }
   });
 
 
   app.post('/response', (req, res) => {
+    const identity = enforceStudioBinding(req, res);
+    if (!identity) return;
+
     const { requestId, response, error } = req.body;
 
     if (error) {
@@ -133,7 +263,8 @@ export function createHttpServer(tools: RobloxStudioTools, bridge: BridgeService
   });
 
   app.post('/proxy', async (req, res) => {
-    const { endpoint, data } = req.body ?? {};
+    const { endpoint, data, proxyInstanceId: rawProxyInstanceId } = req.body ?? {};
+    const proxyInstanceId = getProxyInstanceIdValue(rawProxyInstanceId);
 
     if (typeof endpoint !== 'string' || endpoint.length === 0) {
       res.status(400).json({ error: 'endpoint is required' });
@@ -141,6 +272,9 @@ export function createHttpServer(tools: RobloxStudioTools, bridge: BridgeService
     }
 
     try {
+      setConnectionMode('proxying');
+      trackProxyInstance(proxyInstanceId);
+      trackMCPActivity();
       const response = await bridge.sendRequest(endpoint, data);
       res.json({ response });
     } catch (error) {
@@ -553,6 +687,8 @@ export function createHttpServer(tools: RobloxStudioTools, bridge: BridgeService
   (app as any).setMCPServerActive = setMCPServerActive;
   (app as any).isMCPServerActive = isMCPServerActive;
   (app as any).trackMCPActivity = trackMCPActivity;
+  (app as any).setConnectionMode = setConnectionMode;
+  (app as any).getConnectionMode = getConnectionMode;
 
   return app;
 }

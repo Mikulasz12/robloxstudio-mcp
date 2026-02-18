@@ -144,6 +144,35 @@ describe('HTTP Server', () => {
 
       expect(app.isPluginConnected()).toBe(true);
     });
+
+    test('should reject poll from different studio instance when bridge is already bound', async () => {
+      app.setMCPServerActive(true);
+
+      await request(app)
+        .post('/ready')
+        .send({ studioInstanceId: 'studio-a', placeId: '1', placeName: 'Project A' })
+        .expect(200);
+
+      const response = await request(app)
+        .get('/poll')
+        .query({ studioInstanceId: 'studio-b', placeId: '2', placeName: 'Project B' })
+        .expect(409);
+
+      expect(response.body).toMatchObject({
+        error: 'Studio instance mismatch',
+        code: 'STUDIO_INSTANCE_MISMATCH',
+        expected: {
+          studioInstanceId: 'studio-a',
+          placeId: '1',
+          placeName: 'Project A',
+        },
+        got: {
+          studioInstanceId: 'studio-b',
+          placeId: '2',
+          placeName: 'Project B',
+        },
+      });
+    });
   });
 
   describe('Response Handling', () => {
@@ -235,6 +264,108 @@ describe('HTTP Server', () => {
       const response = await proxyRequest;
       expect(response.status).toBe(200);
       expect(response.body).toEqual({ response: { ok: true } });
+    });
+
+    test('should keep reporting proxying mode after proxied activity', async () => {
+      app.setMCPServerActive(true);
+
+      const proxyRequest = new Promise<request.Response>((resolve, reject) => {
+        request(app)
+          .post('/proxy')
+          .send({
+            endpoint: '/api/proxy-test',
+            data: { value: 456 }
+          })
+          .end((error, response) => {
+            if (error) {
+              reject(error);
+              return;
+            }
+            resolve(response);
+          });
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      const pendingRequest = bridge.getPendingRequest();
+      expect(pendingRequest).toBeTruthy();
+
+      await request(app)
+        .post('/response')
+        .send({
+          requestId: pendingRequest!.requestId,
+          response: { ok: true }
+        })
+        .expect(200);
+
+      await proxyRequest;
+
+      const originalDateNow = Date.now;
+      Date.now = jest.fn(() => originalDateNow() + 60000);
+
+      const pollResponse = await request(app)
+        .get('/poll')
+        .expect(503);
+      expect(pollResponse.body.connectionMode).toBe('proxying');
+
+      const statusResponse = await request(app)
+        .get('/status')
+        .expect(200);
+      expect(statusResponse.body.connectionMode).toBe('proxying');
+
+      Date.now = originalDateNow;
+    });
+
+    test('should report active proxied instance count', async () => {
+      app.setMCPServerActive(true);
+
+      const sendProxiedRequest = async (proxyInstanceId: string) => {
+        const proxyRequest = new Promise<request.Response>((resolve, reject) => {
+          request(app)
+            .post('/proxy')
+            .send({
+              endpoint: '/api/proxy-count-test',
+              data: { value: proxyInstanceId },
+              proxyInstanceId
+            })
+            .end((error, response) => {
+              if (error) {
+                reject(error);
+                return;
+              }
+              resolve(response);
+            });
+        });
+
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        const pendingRequest = bridge.getPendingRequest();
+        expect(pendingRequest).toBeTruthy();
+
+        await request(app)
+          .post('/response')
+          .send({
+            requestId: pendingRequest!.requestId,
+            response: { ok: true }
+          })
+          .expect(200);
+
+        await proxyRequest;
+      };
+
+      await sendProxiedRequest('proxy-a');
+
+      const firstStatus = await request(app)
+        .get('/status')
+        .expect(200);
+      expect(firstStatus.body.connectionMode).toBe('proxying');
+      expect(firstStatus.body.proxyInstanceCount).toBe(1);
+
+      await sendProxiedRequest('proxy-b');
+
+      const secondPoll = await request(app)
+        .get('/poll')
+        .expect(200);
+      expect(secondPoll.body.connectionMode).toBe('proxying');
+      expect(secondPoll.body.proxyInstanceCount).toBe(2);
     });
   });
 

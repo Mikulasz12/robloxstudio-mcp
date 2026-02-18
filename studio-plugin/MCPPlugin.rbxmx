@@ -42,6 +42,7 @@ Communication.checkForUpdates()
 local TS = require(script.Parent.Parent.include.RuntimeLib)
 local _services = TS.import(script, script.Parent.Parent, "node_modules", "@rbxts", "services")
 local HttpService = _services.HttpService
+local MarketplaceService = _services.MarketplaceService
 local RunService = _services.RunService
 local State = TS.import(script, script.Parent, "State")
 local Utils = TS.import(script, script.Parent, "Utils")
@@ -52,6 +53,17 @@ local InstanceHandlers = TS.import(script, script.Parent, "handlers", "InstanceH
 local ScriptHandlers = TS.import(script, script.Parent, "handlers", "ScriptHandlers")
 local MetadataHandlers = TS.import(script, script.Parent, "handlers", "MetadataHandlers")
 local TestHandlers = TS.import(script, script.Parent, "handlers", "TestHandlers")
+local STUDIO_INSTANCE_ID = (function()
+	local ok, debugId = pcall(function()
+		return game:GetDebugId(16)
+	end)
+	if ok and type(debugId) == "string" and #debugId > 0 then
+		return debugId
+	end
+	return HttpService:GenerateGUID(false)
+end)()
+local cachedPlaceName
+local attemptedPlaceNameLookup = false
 local routeMap = {
 	["/api/file-tree"] = QueryHandlers.getFileTree,
 	["/api/search-files"] = QueryHandlers.searchFiles,
@@ -107,7 +119,43 @@ local function processRequest(request)
 		}
 	end
 end
+local function getStudioIdentityPayload()
+	local placeId = tostring(game.PlaceId)
+	if not attemptedPlaceNameLookup then
+		attemptedPlaceNameLookup = true
+		if game.PlaceId > 0 then
+			local ok, productInfo = pcall(function()
+				return MarketplaceService:GetProductInfo(game.PlaceId)
+			end)
+			if ok and type(productInfo.Name) == "string" and #productInfo.Name > 0 then
+				cachedPlaceName = productInfo.Name
+			end
+		end
+	end
+	local _object = {
+		studioInstanceId = STUDIO_INSTANCE_ID,
+		placeId = placeId,
+	}
+	local _left = "placeName"
+	local _condition = cachedPlaceName
+	if _condition == nil then
+		_condition = placeId
+	end
+	_object[_left] = _condition
+	return _object
+end
+local function getPollUrl(conn)
+	local identity = getStudioIdentityPayload()
+	local queryParts = { `studioInstanceId={HttpService:UrlEncode(identity.studioInstanceId)}`, `placeId={HttpService:UrlEncode(identity.placeId)}` }
+	if identity.placeName ~= nil then
+		local _arg0 = `placeName={HttpService:UrlEncode(identity.placeName)}`
+		table.insert(queryParts, _arg0)
+	end
+	local query = table.concat(queryParts, "&")
+	return `{conn.serverUrl}/poll?{query}`
+end
 local function sendResponse(conn, requestId, responseData)
+	local identity = getStudioIdentityPayload()
 	pcall(function()
 		HttpService:RequestAsync({
 			Url = `{conn.serverUrl}/response`,
@@ -118,9 +166,93 @@ local function sendResponse(conn, requestId, responseData)
 			Body = HttpService:JSONEncode({
 				requestId = requestId,
 				response = responseData,
+				studioInstanceId = identity.studioInstanceId,
+				placeId = identity.placeId,
+				placeName = identity.placeName,
 			}),
 		})
 	end)
+end
+local function parseMismatchResponse(body)
+	local ok, parsed = pcall(function()
+		return HttpService:JSONDecode(body)
+	end)
+	if ok then
+		return parsed
+	end
+	return nil
+end
+local function applyStudioMismatchState(connIndex, body)
+	local conn = State.getConnection(connIndex)
+	if not conn then
+		return nil
+	end
+	conn.lastHttpOk = true
+	local mismatch = parseMismatchResponse(body)
+	local _result = mismatch
+	if _result ~= nil then
+		_result = _result.expected
+		if _result ~= nil then
+			_result = _result.placeName
+		end
+	end
+	local _condition = _result
+	if _condition == nil then
+		local _result_1 = mismatch
+		if _result_1 ~= nil then
+			_result_1 = _result_1.expected
+			if _result_1 ~= nil then
+				_result_1 = _result_1.placeId
+			end
+		end
+		_condition = _result_1
+		if _condition == nil then
+			_condition = "another Studio instance"
+		end
+	end
+	local expectedPlace = _condition
+	local _result_1 = mismatch
+	if _result_1 ~= nil then
+		_result_1 = _result_1.got
+		if _result_1 ~= nil then
+			_result_1 = _result_1.placeName
+		end
+	end
+	local _condition_1 = _result_1
+	if _condition_1 == nil then
+		local _result_2 = mismatch
+		if _result_2 ~= nil then
+			_result_2 = _result_2.got
+			if _result_2 ~= nil then
+				_result_2 = _result_2.placeId
+			end
+		end
+		_condition_1 = _result_2
+		if _condition_1 == nil then
+			_condition_1 = game.Name
+		end
+	end
+	local gotPlace = _condition_1
+	if connIndex == State.getActiveTabIndex() then
+		local el = UI.getElements()
+		el.statusLabel.Text = "Connected to different Studio instance"
+		el.statusLabel.TextColor3 = Color3.fromRGB(245, 158, 11)
+		el.statusIndicator.BackgroundColor3 = Color3.fromRGB(245, 158, 11)
+		el.statusPulse.BackgroundColor3 = Color3.fromRGB(245, 158, 11)
+		el.statusText.Text = "MISMATCH"
+		el.detailStatusLabel.Text = `Expected: {expectedPlace}  Got: {gotPlace}`
+		el.detailStatusLabel.TextColor3 = Color3.fromRGB(245, 158, 11)
+		el.step1Dot.BackgroundColor3 = Color3.fromRGB(34, 197, 94)
+		el.step1Label.Text = "HTTP server (OK)"
+		el.step2Dot.BackgroundColor3 = Color3.fromRGB(245, 158, 11)
+		el.step2Label.Text = "MCP bridge (instance mismatch)"
+		el.step3Dot.BackgroundColor3 = Color3.fromRGB(245, 158, 11)
+		el.step3Label.Text = "Commands (blocked)"
+		el.troubleshootLabel.Text = "This bridge is bound to another Studio instance. Use the correct port for this project."
+		el.troubleshootLabel.Visible = true
+		conn.mcpWaitStartTime = nil
+		UI.stopPulseAnimation()
+	end
 end
 local function getConnectionStatus(connIndex)
 	local conn = State.getConnection(connIndex)
@@ -146,7 +278,7 @@ local function pollForRequests(connIndex)
 	conn.isPolling = true
 	local success, result = pcall(function()
 		return HttpService:RequestAsync({
-			Url = `{conn.serverUrl}/poll`,
+			Url = getPollUrl(conn),
 			Method = "GET",
 			Headers = {
 				["Content-Type"] = "application/json",
@@ -156,23 +288,28 @@ local function pollForRequests(connIndex)
 	conn.isPolling = false
 	local ui = UI.getElements()
 	UI.updateTabDot(connIndex)
-	if success and (result.Success or result.StatusCode == 503) then
+	if success and result.StatusCode == 409 then
+		applyStudioMismatchState(connIndex, result.Body)
+	elseif success and (result.Success or result.StatusCode == 503) then
 		conn.consecutiveFailures = 0
 		conn.currentRetryDelay = 0.5
 		conn.lastSuccessfulConnection = tick()
 		local data = HttpService:JSONDecode(result.Body)
 		local mcpConnected = data.mcpConnected == true
+		local isProxying = data.connectionMode == "proxying"
+		local rawProxyInstanceCount = data.proxyInstanceCount
+		local _condition = tonumber(rawProxyInstanceCount)
+		if _condition == nil then
+			_condition = 1
+		end
+		local proxyInstanceCount = math.max(1, math.floor(_condition))
+		local proxyInstanceLabel = if proxyInstanceCount == 1 then "1 instance" else `{proxyInstanceCount} instances`
 		conn.lastHttpOk = true
 		if connIndex == State.getActiveTabIndex() then
 			local el = ui
 			el.step1Dot.BackgroundColor3 = Color3.fromRGB(34, 197, 94)
 			el.step1Label.Text = "HTTP server (OK)"
-			local _condition = mcpConnected
-			if _condition then
-				local _value = (string.find(el.statusLabel.Text, "Connected"))
-				_condition = not (_value ~= 0 and _value == _value and _value)
-			end
-			if _condition then
+			if mcpConnected then
 				el.statusLabel.Text = "Connected"
 				el.statusLabel.TextColor3 = Color3.fromRGB(34, 197, 94)
 				el.statusIndicator.BackgroundColor3 = Color3.fromRGB(34, 197, 94)
@@ -181,7 +318,7 @@ local function pollForRequests(connIndex)
 				el.detailStatusLabel.Text = "HTTP: OK  MCP: OK"
 				el.detailStatusLabel.TextColor3 = Color3.fromRGB(34, 197, 94)
 				el.step2Dot.BackgroundColor3 = Color3.fromRGB(34, 197, 94)
-				el.step2Label.Text = "MCP bridge (OK)"
+				el.step2Label.Text = if isProxying then `MCP bridge (proxying {proxyInstanceLabel})` else "MCP bridge (OK)"
 				el.step3Dot.BackgroundColor3 = Color3.fromRGB(34, 197, 94)
 				el.step3Label.Text = "Commands (OK)"
 				conn.mcpWaitStartTime = nil
@@ -312,6 +449,40 @@ local function discoverPort()
 	end
 	return nil
 end
+local function findActiveConnectionIndexByServerUrl(serverUrl, excludeIndex)
+	for i = 0, #State.getConnections() - 1 do
+		if i == excludeIndex then
+			continue
+		end
+		local other = State.getConnections()[i + 1]
+		if other and other.isActive and other.serverUrl == serverUrl then
+			return i
+		end
+	end
+	return nil
+end
+local function applyDuplicateConnectionState(connIndex, duplicateIndex, serverUrl)
+	if connIndex ~= State.getActiveTabIndex() then
+		return nil
+	end
+	local el = UI.getElements()
+	el.statusLabel.Text = "Bridge already active in another tab"
+	el.statusLabel.TextColor3 = Color3.fromRGB(245, 158, 11)
+	el.statusIndicator.BackgroundColor3 = Color3.fromRGB(245, 158, 11)
+	el.statusPulse.BackgroundColor3 = Color3.fromRGB(245, 158, 11)
+	el.statusText.Text = "DUPLICATE"
+	el.detailStatusLabel.Text = `URL: {serverUrl}`
+	el.detailStatusLabel.TextColor3 = Color3.fromRGB(245, 158, 11)
+	el.step1Dot.BackgroundColor3 = Color3.fromRGB(245, 158, 11)
+	el.step1Label.Text = "HTTP server (duplicate tab)"
+	el.step2Dot.BackgroundColor3 = Color3.fromRGB(245, 158, 11)
+	el.step2Label.Text = "MCP bridge (already active)"
+	el.step3Dot.BackgroundColor3 = Color3.fromRGB(245, 158, 11)
+	el.step3Label.Text = "Commands (blocked)"
+	el.troubleshootLabel.Text = `This bridge is already active in tab {duplicateIndex + 1}. Use a different port for concurrent workflows.`
+	el.troubleshootLabel.Visible = true
+	UI.stopPulseAnimation()
+end
 local function activatePlugin(connIndex)
 	local _condition = connIndex
 	if _condition == nil then
@@ -323,10 +494,6 @@ local function activatePlugin(connIndex)
 		return nil
 	end
 	local ui = UI.getElements()
-	conn.isActive = true
-	conn.consecutiveFailures = 0
-	conn.currentRetryDelay = 0.5
-	ui.screenGui.Enabled = true
 	if idx == State.getActiveTabIndex() then
 		conn.serverUrl = ui.urlInput.Text
 		local portStr = string.match(conn.serverUrl, ":(%d+)$")
@@ -337,9 +504,26 @@ local function activatePlugin(connIndex)
 			end
 			conn.port = _condition_1
 		end
+	end
+	local duplicateConnectionIndex = findActiveConnectionIndexByServerUrl(conn.serverUrl, idx)
+	if duplicateConnectionIndex ~= nil then
+		conn.isActive = false
+		conn.consecutiveFailures = 0
+		conn.currentRetryDelay = 0.5
+		applyDuplicateConnectionState(idx, duplicateConnectionIndex, conn.serverUrl)
+		UI.updateTabDot(idx)
+		return nil
+	end
+	conn.isActive = true
+	conn.consecutiveFailures = 0
+	conn.currentRetryDelay = 0.5
+	ui.screenGui.Enabled = true
+	if idx == State.getActiveTabIndex() then
 		UI.updateUIState()
 	end
 	UI.updateTabDot(idx)
+	local defaultBaseUrl = `http://localhost:{State.BASE_PORT}`
+	local shouldAutoDiscover = conn.serverUrl == defaultBaseUrl
 	if not conn.heartbeatConnection then
 		conn.heartbeatConnection = RunService.Heartbeat:Connect(function()
 			local now = tick()
@@ -351,15 +535,22 @@ local function activatePlugin(connIndex)
 		end)
 	end
 	task.spawn(function()
-		local discoveredPort = discoverPort()
-		if discoveredPort ~= nil then
-			conn.port = discoveredPort
-			conn.serverUrl = `http://localhost:{discoveredPort}`
-			if idx == State.getActiveTabIndex() then
-				ui.urlInput.Text = conn.serverUrl
+		if shouldAutoDiscover then
+			local discoveredPort = discoverPort()
+			if discoveredPort ~= nil then
+				local discoveredUrl = `http://localhost:{discoveredPort}`
+				local duplicateIndex = findActiveConnectionIndexByServerUrl(discoveredUrl, idx)
+				if duplicateIndex == nil then
+					conn.port = discoveredPort
+					conn.serverUrl = discoveredUrl
+					if idx == State.getActiveTabIndex() then
+						ui.urlInput.Text = conn.serverUrl
+					end
+				end
 			end
 		end
 		pcall(function()
+			local identity = getStudioIdentityPayload()
 			HttpService:RequestAsync({
 				Url = `{conn.serverUrl}/ready`,
 				Method = "POST",
@@ -369,6 +560,9 @@ local function activatePlugin(connIndex)
 				Body = HttpService:JSONEncode({
 					pluginReady = true,
 					timestamp = tick(),
+					studioInstanceId = identity.studioInstanceId,
+					placeId = identity.placeId,
+					placeName = identity.placeName,
 				}),
 			})
 		end)
@@ -390,6 +584,7 @@ local function deactivatePlugin(connIndex)
 	end
 	UI.updateTabDot(idx)
 	pcall(function()
+		local identity = getStudioIdentityPayload()
 		HttpService:RequestAsync({
 			Url = `{conn.serverUrl}/disconnect`,
 			Method = "POST",
@@ -398,6 +593,9 @@ local function deactivatePlugin(connIndex)
 			},
 			Body = HttpService:JSONEncode({
 				timestamp = tick(),
+				studioInstanceId = identity.studioInstanceId,
+				placeId = identity.placeId,
+				placeName = identity.placeName,
 			}),
 		})
 	end)
@@ -2613,21 +2811,27 @@ local function getScriptSource(requestData)
 		local fullSource = readScriptSource(instance)
 		local lines, hasTrailingNewline = splitLines(fullSource)
 		local totalLineCount = #lines
+		local isPartialRequest = startLine ~= nil or endLine ~= nil
 		local sourceToReturn = fullSource
 		local returnedStartLine = 1
 		local returnedEndLine = totalLineCount
-		if startLine ~= nil or endLine ~= nil then
+		if isPartialRequest then
 			local _condition = startLine
 			if _condition == nil then
 				_condition = 1
 			end
 			local actualStartLine = math.max(1, _condition)
-			local _exp = #lines
 			local _condition_1 = endLine
 			if _condition_1 == nil then
-				_condition_1 = #lines
+				_condition_1 = totalLineCount
 			end
-			local actualEndLine = math.min(_exp, _condition_1)
+			local actualEndLine = math.min(totalLineCount, _condition_1)
+			if actualStartLine > totalLineCount then
+				error(`startLine out of range (1-{totalLineCount})`)
+			end
+			if actualEndLine < actualStartLine then
+				error(`Invalid line range: startLine ({actualStartLine}) is greater than endLine ({actualEndLine})`)
+			end
 			local selectedLines = {}
 			do
 				local i = actualStartLine
@@ -2649,14 +2853,14 @@ local function getScriptSource(requestData)
 				end
 			end
 			sourceToReturn = table.concat(selectedLines, "\n")
-			if hasTrailingNewline and actualEndLine == #lines and string.sub(sourceToReturn, -1) ~= "\n" then
+			if hasTrailingNewline and actualEndLine == totalLineCount and string.sub(sourceToReturn, -1) ~= "\n" then
 				sourceToReturn ..= "\n"
 			end
 			returnedStartLine = actualStartLine
 			returnedEndLine = actualEndLine
 		end
 		local numberedLines = {}
-		local linesToNumber = if startLine ~= nil then (splitLines(sourceToReturn)) else lines
+		local linesToNumber = if isPartialRequest then (splitLines(sourceToReturn)) else lines
 		local lineOffset = returnedStartLine - 1
 		for i = 0, #linesToNumber - 1 do
 			local _arg0 = `{i + 1 + lineOffset}: {linesToNumber[i + 1]}`
@@ -2673,7 +2877,7 @@ local function getScriptSource(requestData)
 			lineCount = totalLineCount,
 			startLine = returnedStartLine,
 			endLine = returnedEndLine,
-			isPartial = startLine ~= nil or endLine ~= nil,
+			isPartial = isPartialRequest,
 			truncated = false,
 		}
 		if startLine == nil and endLine == nil and #fullSource > 50000 then

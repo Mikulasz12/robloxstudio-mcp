@@ -1,4 +1,5 @@
 import { BridgeService } from './bridge-service.js';
+import { randomUUID } from 'crypto';
 
 interface ProxyResponseBody {
   response?: unknown;
@@ -8,11 +9,13 @@ interface ProxyResponseBody {
 export class ProxyBridgeService extends BridgeService {
   private readonly proxyUrl: string;
   private readonly proxyRequestTimeout: number;
+  private readonly proxyInstanceId: string;
 
   constructor(baseUrl: string, requestTimeout: number = 30000) {
     super();
     this.proxyUrl = `${baseUrl.replace(/\/+$/, '')}/proxy`;
     this.proxyRequestTimeout = requestTimeout;
+    this.proxyInstanceId = randomUUID();
   }
 
   override async sendRequest(endpoint: string, data: any): Promise<any> {
@@ -25,7 +28,7 @@ export class ProxyBridgeService extends BridgeService {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ endpoint, data }),
+        body: JSON.stringify({ endpoint, data, proxyInstanceId: this.proxyInstanceId }),
         signal: controller.signal,
       });
 

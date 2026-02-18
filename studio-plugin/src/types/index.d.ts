@@ -29,8 +29,24 @@ export interface RequestPayload {
 
 export interface PollResponse {
 	mcpConnected: boolean;
+	connectionMode?: "direct" | "proxying";
+	proxyInstanceCount?: number;
 	request?: RequestPayload;
 	requestId?: string;
+}
+
+export interface StudioIdentityPayload {
+	studioInstanceId?: string;
+	placeId?: string;
+	placeName?: string;
+}
+
+export interface StudioMismatchResponse {
+	error?: string;
+	code?: string;
+	message?: string;
+	expected?: StudioIdentityPayload;
+	got?: StudioIdentityPayload;
 }
 
 
