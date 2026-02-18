@@ -6,7 +6,7 @@
 
 ---
 
-## What is This?
+## What Is This?
 
 An MCP server that lets AI explore your game structure, read/edit scripts, and perform bulk changes locally.
 
@@ -36,8 +36,6 @@ Plugin shows "Connected" when ready.
 <details>
 <summary>Other MCP clients (Claude Desktop, Cursor, Copilot MCP-compatible clients, etc.)</summary>
 
-`stdio` example (single Studio target, no daemon):
-
 ```json
 {
   "mcpServers": {
@@ -60,155 +58,69 @@ Plugin shows "Connected" when ready.
   }
 }
 ```
-
-`url` example (shared daemon endpoint):
-
-```json
-{
-  "mcpServers": {
-    "robloxstudio-mcp": {
-      "url": "http://127.0.0.1:59000/mcp"
-    }
-  }
-}
-```
-
-Use the same URL for Codex/Claude/Copilot clients when you want them all routed to the same Studio target.
 </details>
 
-## Single Studio Target (No Daemon Needed)
+## Default: One Studio Instance (No Daemon)
 
-If you are working with **one Studio instance**, use `stdio` and do **not** run a daemon.
+If you are working with one Studio instance, use `stdio` and do not run a daemon.
 
-Codex `config.toml` example:
+Some AI clients (including Codex) can open multiple MCP sessions. If they use the same Studio port, only one server owns that port and the others automatically forward through it.
 
-```toml
-[mcp_servers.robloxstudio]
-command = "cmd"
-args = ["/c", "npx", "-y", "robloxstudio-mcp@latest"]
-enabled = true
-```
-
-Keep the plugin URL at:
+Use this plugin URL:
 
 ```text
 http://localhost:58741
 ```
 
-## Transport Modes
+## Multiple Studio Instances
 
-### Which mode should I use?
+For concurrent workflows, run one MCP server per Studio instance on different ports.
 
-- Use `stdio` if you want one Studio target and do not want to run a daemon.
-- Use `streamable-http` for concurrent workflows, especially with multiple Studio instances and projects.
+2+ workflow pattern (no daemon):
 
-### 1) Stdio Mode (default)
+1. Workflow A:
+`ROBLOX_STUDIO_PORT=58741 npx -y robloxstudio-mcp@latest`
+Plugin URL: `http://localhost:58741`
+2. Workflow B:
+`ROBLOX_STUDIO_PORT=58742 npx -y robloxstudio-mcp@latest`
+Plugin URL: `http://localhost:58742`
+3. Workflow C+:
+increment the port for each additional workflow (`58743`, `58744`, ...)
 
-- Easiest quick start (`npx ...`)
-- One MCP process per client session
-- Recommended for one Studio target when you do not want a daemon
-- If another MCP process tries to use the same Studio bridge port, it is automatically proxied to the primary instance
-- The Studio plugin UI will show this on the MCP bridge line as `MCP bridge (proxying 1 instance)` or `MCP bridge (proxying N instances)`
-- This resolves common `EADDRINUSE`/port-collision issues and lets multiple MCP clients share one Studio target without manual port setup
+Keep each workflow mapped to its own port end-to-end.
 
-Example: Codex + Claude + Copilot on one Studio target (no daemon)
+If you want two or more clients on the same workflow/Studio, point them to the same port. One MCP server owns the port; all additional sessions forward to it automatically.
 
-1. Configure each client to run the same command (`npx -y robloxstudio-mcp@latest`)
-2. Keep the Studio plugin on `http://localhost:58741`
-3. Use all clients concurrently
+## Optional: Shared Daemon Mode
 
-What this resolves:
+Daemon mode is optional. Use it only when you want a shared long-running `url` endpoint.
 
-- You do not need separate bridge ports per client
-- Extra MCP processes automatically proxy to the primary one
-- The plugin tells you when this is happening via `MCP bridge (proxying 1 instance)` / `MCP bridge (proxying N instances)`
+Useful in simple terms:
 
-### 2) Shared Daemon Mode (recommended for concurrent workflows)
+- You want one stable MCP URL instead of starting a new server per client.
+- You have multiple AI clients and want them all pointed at the same endpoint.
+- You want long-running server state/logs in one place.
 
-The quick-start commands above use stdio, which launches one MCP process per client session.
-
-If you want stable routing for concurrent workflows (for example, when you have multiple Studio instances open), run this server in Streamable HTTP mode and connect clients with a `url`.
-
-Start daemon (published package):
+Start daemon:
 
 ```bash
 npx -y robloxstudio-mcp@latest --streamable-http
 ```
 
-Start daemon (local checkout helper):
-
-```powershell
-./scripts/start-streamable-http.ps1
-```
-
-Custom ports example:
-
-```powershell
-./scripts/start-streamable-http.ps1 -StudioPort 58742 -McpPort 59001
-```
-
-Use published package instead of local `dist`:
-
-```powershell
-./scripts/start-streamable-http.ps1 -UseNpx
-```
-
-Environment variables (daemon mode):
-
-- `MCP_TRANSPORT=streamable-http` (or `--streamable-http`)
-- `MCP_HTTP_HOST` (default `127.0.0.1`)
-- `MCP_HTTP_PORT` (default `59000`)
-- `MCP_HTTP_PATH` (default `/mcp`)
-- `ROBLOX_STUDIO_PORT` (plugin bridge port, default `58741`)
-- `ROBLOX_STUDIO_PORT_RETRY_COUNT` (set to `1` for single-primary behavior)
-
-## Route Multiple Clients to One Studio (same proxy target)
-
-Run one daemon, then point every MCP client to the same URL.
-
-Codex example:
-
-```toml
-[mcp_servers.robloxstudio]
-url = "http://127.0.0.1:59000/mcp"
-enabled = true
-```
-
-Any other MCP client that supports URL transport should use the same endpoint:
+Client `url`:
 
 ```text
 http://127.0.0.1:59000/mcp
 ```
 
-This gives you one stable command endpoint per Studio target and works well in concurrent workflows.
+Environment options:
 
-## Proxy Behavior (when bridge port is already in use)
-
-When another MCP instance cannot bind `ROBLOX_STUDIO_PORT`, it automatically forwards tool calls to the primary instance through `/proxy`.
-
-- Primary instance owns plugin polling (`/poll`, `/response`)
-- Secondary instances proxy tool requests to primary
-- Plugin status can show `MCP bridge (proxying 1 instance)` / `MCP bridge (proxying N instances)` when forwarded traffic is active
-- If a Studio instance connects to the wrong bridge target, the plugin shows an instance-mismatch warning and blocks commands until you switch to the correct port
-
-## Multiple Studio Instances
-
-Use one daemon per Studio target (unique bridge + MCP ports).
-
-Example:
-
-```powershell
-# Studio A
-./scripts/start-streamable-http.ps1 -StudioPort 58741 -McpPort 59000
-
-# Studio B
-./scripts/start-streamable-http.ps1 -StudioPort 58742 -McpPort 59001
-```
-
-Then configure separate MCP entries:
-
-- `http://127.0.0.1:59000/mcp` -> Studio A
-- `http://127.0.0.1:59001/mcp` -> Studio B
+- `MCP_TRANSPORT=streamable-http`
+- `MCP_HTTP_HOST` (default `127.0.0.1`)
+- `MCP_HTTP_PORT` (default `59000`)
+- `MCP_HTTP_PATH` (default `/mcp`)
+- `ROBLOX_STUDIO_PORT` (default `58741`)
+- `ROBLOX_STUDIO_PORT_RETRY_COUNT` (set `1` for single-primary behavior)
 
 ## What Can You Do?
 
