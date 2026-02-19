@@ -17,7 +17,7 @@ describe('BridgeService', () => {
       const endpoint = '/api/test';
       const data = { test: 'data' };
 
-      const requestPromise = bridgeService.sendRequest(endpoint, data);
+      bridgeService.sendRequest(endpoint, data);
 
       const pendingRequest = bridgeService.getPendingRequest();
       expect(pendingRequest).toBeTruthy();
@@ -61,6 +61,20 @@ describe('BridgeService', () => {
       jest.advanceTimersByTime(31000);
 
       await expect(requestPromise).rejects.toThrow('Request timeout');
+    });
+
+    test('should not dispatch the same request twice while it is in flight', async () => {
+      const requestPromise = bridgeService.sendRequest('/api/test', { id: 1 });
+
+      const firstDispatch = bridgeService.getPendingRequest();
+      expect(firstDispatch).toBeTruthy();
+
+      // A second poll should not receive the same request again.
+      const secondDispatch = bridgeService.getPendingRequest();
+      expect(secondDispatch).toBeNull();
+
+      bridgeService.resolveRequest(firstDispatch!.requestId, { ok: true });
+      await expect(requestPromise).resolves.toEqual({ ok: true });
     });
   });
 
@@ -116,17 +130,17 @@ describe('BridgeService', () => {
       bridgeService.sendRequest('/api/test3', { order: 3 });
 
       const firstRequest = bridgeService.getPendingRequest();
-      expect(firstRequest?.request.data.order).toBe(1);
+      expect((firstRequest?.request.data as { order: number }).order).toBe(1);
 
       bridgeService.resolveRequest(firstRequest!.requestId, {});
 
       const secondRequest = bridgeService.getPendingRequest();
-      expect(secondRequest?.request.data.order).toBe(2);
+      expect((secondRequest?.request.data as { order: number }).order).toBe(2);
 
       bridgeService.resolveRequest(secondRequest!.requestId, {});
 
       const thirdRequest = bridgeService.getPendingRequest();
-      expect(thirdRequest?.request.data.order).toBe(3);
+      expect((thirdRequest?.request.data as { order: number }).order).toBe(3);
 
       bridgeService.resolveRequest(thirdRequest!.requestId, {});
 

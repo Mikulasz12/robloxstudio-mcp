@@ -17,7 +17,7 @@ import {
 import { createServer as createNodeHttpServer } from 'http';
 import { randomUUID } from 'crypto';
 import { createRequire } from 'module';
-import { createHttpServer } from './http-server.js';
+import { createHttpServer, type BridgeHttpServer } from './http-server.js';
 import { listenWithRetry } from './http-listener.js';
 import { ProxyBridgeService } from './proxy-bridge-service.js';
 import { attachSessionCloseHandler } from './streamable-session-lifecycle.js';
@@ -27,20 +27,12 @@ import { BridgeService } from './bridge-service.js';
 const require = createRequire(import.meta.url);
 const { version: VERSION } = require('../package.json');
 
-type BridgeHttpApp = ReturnType<typeof createHttpServer> & {
-  isPluginConnected: () => boolean;
-  setMCPServerActive: (active: boolean) => void;
-  isMCPServerActive: () => boolean;
-  trackMCPActivity: () => void;
-  setConnectionMode: (mode: 'direct' | 'proxying') => void;
-};
-
 class RobloxStudioMCPServer {
   private server: Server;
   private tools: RobloxStudioTools;
   private bridge: BridgeService;
   private bridgeMode: 'primary' | 'proxy' = 'primary';
-  private httpApp?: BridgeHttpApp;
+  private httpApp?: BridgeHttpServer;
   private bridgeStatusInterval?: ReturnType<typeof setInterval>;
   private bridgeCleanupInterval?: ReturnType<typeof setInterval>;
   private proxyPromotionInterval?: ReturnType<typeof setInterval>;
@@ -969,102 +961,167 @@ class RobloxStudioMCPServer {
 
     this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const { name, arguments: args } = request.params;
+      const toolArgs: Record<string, unknown> =
+        args && typeof args === 'object' && !Array.isArray(args)
+          ? (args as Record<string, unknown>)
+          : {};
 
       try {
         switch (name) {
 
           case 'get_file_tree':
-            return await this.tools.getFileTree((args as any)?.path || '');
+            return await this.tools.getFileTree((toolArgs.path as string | undefined) || '');
           case 'search_files':
-            return await this.tools.searchFiles((args as any)?.query as string, (args as any)?.searchType || 'name');
+            return await this.tools.searchFiles(toolArgs.query as string, (toolArgs.searchType as string | undefined) || 'name');
 
           case 'get_place_info':
             return await this.tools.getPlaceInfo();
           case 'get_services':
-            return await this.tools.getServices((args as any)?.serviceName);
+            return await this.tools.getServices(toolArgs.serviceName as string | undefined);
           case 'search_objects':
-            return await this.tools.searchObjects((args as any)?.query as string, (args as any)?.searchType || 'name', (args as any)?.propertyName);
+            return await this.tools.searchObjects(
+              toolArgs.query as string,
+              (toolArgs.searchType as string | undefined) || 'name',
+              toolArgs.propertyName as string | undefined
+            );
 
           case 'get_instance_properties':
-            return await this.tools.getInstanceProperties((args as any)?.instancePath as string);
+            return await this.tools.getInstanceProperties(toolArgs.instancePath as string);
           case 'get_instance_children':
-            return await this.tools.getInstanceChildren((args as any)?.instancePath as string);
+            return await this.tools.getInstanceChildren(toolArgs.instancePath as string);
           case 'search_by_property':
-            return await this.tools.searchByProperty((args as any)?.propertyName as string, (args as any)?.propertyValue as string);
+            return await this.tools.searchByProperty(toolArgs.propertyName as string, toolArgs.propertyValue as string);
           case 'get_class_info':
-            return await this.tools.getClassInfo((args as any)?.className as string);
+            return await this.tools.getClassInfo(toolArgs.className as string);
 
           case 'get_project_structure':
-            return await this.tools.getProjectStructure((args as any)?.path, (args as any)?.maxDepth, (args as any)?.scriptsOnly);
+            return await this.tools.getProjectStructure(
+              toolArgs.path as string | undefined,
+              toolArgs.maxDepth as number | undefined,
+              toolArgs.scriptsOnly as boolean | undefined
+            );
 
           case 'set_property':
-            return await this.tools.setProperty((args as any)?.instancePath as string, (args as any)?.propertyName as string, (args as any)?.propertyValue);
+            return await this.tools.setProperty(toolArgs.instancePath as string, toolArgs.propertyName as string, toolArgs.propertyValue);
 
           case 'mass_set_property':
-            return await this.tools.massSetProperty((args as any)?.paths as string[], (args as any)?.propertyName as string, (args as any)?.propertyValue);
+            return await this.tools.massSetProperty(toolArgs.paths as string[], toolArgs.propertyName as string, toolArgs.propertyValue);
           case 'mass_get_property':
-            return await this.tools.massGetProperty((args as any)?.paths as string[], (args as any)?.propertyName as string);
+            return await this.tools.massGetProperty(toolArgs.paths as string[], toolArgs.propertyName as string);
 
           case 'create_object':
-            return await this.tools.createObject((args as any)?.className as string, (args as any)?.parent as string, (args as any)?.name);
+            return await this.tools.createObject(
+              toolArgs.className as string,
+              toolArgs.parent as string,
+              toolArgs.name as string | undefined
+            );
           case 'create_object_with_properties':
-            return await this.tools.createObjectWithProperties((args as any)?.className as string, (args as any)?.parent as string, (args as any)?.name, (args as any)?.properties);
+            return await this.tools.createObjectWithProperties(
+              toolArgs.className as string,
+              toolArgs.parent as string,
+              toolArgs.name as string | undefined,
+              toolArgs.properties as Record<string, unknown> | undefined
+            );
           case 'mass_create_objects':
-            return await this.tools.massCreateObjects((args as any)?.objects);
+            return await this.tools.massCreateObjects(toolArgs.objects as Array<{ className: string; parent: string; name?: string }>);
           case 'mass_create_objects_with_properties':
-            return await this.tools.massCreateObjectsWithProperties((args as any)?.objects);
+            return await this.tools.massCreateObjectsWithProperties(toolArgs.objects as Array<{
+              className: string;
+              parent: string;
+              name?: string;
+              properties?: Record<string, unknown>;
+            }>);
           case 'delete_object':
-            return await this.tools.deleteObject((args as any)?.instancePath as string);
+            return await this.tools.deleteObject(toolArgs.instancePath as string);
 
           case 'smart_duplicate':
-            return await this.tools.smartDuplicate((args as any)?.instancePath as string, (args as any)?.count as number, (args as any)?.options);
+            return await this.tools.smartDuplicate(
+              toolArgs.instancePath as string,
+              toolArgs.count as number,
+              toolArgs.options as Parameters<RobloxStudioTools['smartDuplicate']>[2]
+            );
           case 'mass_duplicate':
-            return await this.tools.massDuplicate((args as any)?.duplications);
+            return await this.tools.massDuplicate(
+              toolArgs.duplications as Parameters<RobloxStudioTools['massDuplicate']>[0]
+            );
 
           case 'set_calculated_property':
-            return await this.tools.setCalculatedProperty((args as any)?.paths as string[], (args as any)?.propertyName as string, (args as any)?.formula as string, (args as any)?.variables);
+            return await this.tools.setCalculatedProperty(
+              toolArgs.paths as string[],
+              toolArgs.propertyName as string,
+              toolArgs.formula as string,
+              toolArgs.variables as Record<string, unknown> | undefined
+            );
 
           case 'set_relative_property':
-            return await this.tools.setRelativeProperty((args as any)?.paths as string[], (args as any)?.propertyName as string, (args as any)?.operation, (args as any)?.value, (args as any)?.component);
+            return await this.tools.setRelativeProperty(
+              toolArgs.paths as string[],
+              toolArgs.propertyName as string,
+              toolArgs.operation as Parameters<RobloxStudioTools['setRelativeProperty']>[2],
+              toolArgs.value,
+              toolArgs.component as Parameters<RobloxStudioTools['setRelativeProperty']>[4]
+            );
 
           case 'get_script_source':
-            return await this.tools.getScriptSource((args as any)?.instancePath as string, (args as any)?.startLine, (args as any)?.endLine);
+            return await this.tools.getScriptSource(
+              toolArgs.instancePath as string,
+              toolArgs.startLine as number | undefined,
+              toolArgs.endLine as number | undefined
+            );
           case 'set_script_source':
-            return await this.tools.setScriptSource((args as any)?.instancePath as string, (args as any)?.source as string);
+            return await this.tools.setScriptSource(toolArgs.instancePath as string, toolArgs.source as string);
 
           case 'edit_script_lines':
-            return await this.tools.editScriptLines((args as any)?.instancePath as string, (args as any)?.startLine as number, (args as any)?.endLine as number, (args as any)?.newContent as string);
+            return await this.tools.editScriptLines(
+              toolArgs.instancePath as string,
+              toolArgs.startLine as number,
+              toolArgs.endLine as number,
+              toolArgs.newContent as string
+            );
           case 'insert_script_lines':
-            return await this.tools.insertScriptLines((args as any)?.instancePath as string, (args as any)?.afterLine as number, (args as any)?.newContent as string);
+            return await this.tools.insertScriptLines(
+              toolArgs.instancePath as string,
+              toolArgs.afterLine as number,
+              toolArgs.newContent as string
+            );
           case 'delete_script_lines':
-            return await this.tools.deleteScriptLines((args as any)?.instancePath as string, (args as any)?.startLine as number, (args as any)?.endLine as number);
+            return await this.tools.deleteScriptLines(
+              toolArgs.instancePath as string,
+              toolArgs.startLine as number,
+              toolArgs.endLine as number
+            );
 
           case 'get_attribute':
-            return await this.tools.getAttribute((args as any)?.instancePath as string, (args as any)?.attributeName as string);
+            return await this.tools.getAttribute(toolArgs.instancePath as string, toolArgs.attributeName as string);
           case 'set_attribute':
-            return await this.tools.setAttribute((args as any)?.instancePath as string, (args as any)?.attributeName as string, (args as any)?.attributeValue, (args as any)?.valueType);
+            return await this.tools.setAttribute(
+              toolArgs.instancePath as string,
+              toolArgs.attributeName as string,
+              toolArgs.attributeValue,
+              toolArgs.valueType as string | undefined
+            );
           case 'get_attributes':
-            return await this.tools.getAttributes((args as any)?.instancePath as string);
+            return await this.tools.getAttributes(toolArgs.instancePath as string);
           case 'delete_attribute':
-            return await this.tools.deleteAttribute((args as any)?.instancePath as string, (args as any)?.attributeName as string);
+            return await this.tools.deleteAttribute(toolArgs.instancePath as string, toolArgs.attributeName as string);
 
           case 'get_tags':
-            return await this.tools.getTags((args as any)?.instancePath as string);
+            return await this.tools.getTags(toolArgs.instancePath as string);
           case 'add_tag':
-            return await this.tools.addTag((args as any)?.instancePath as string, (args as any)?.tagName as string);
+            return await this.tools.addTag(toolArgs.instancePath as string, toolArgs.tagName as string);
           case 'remove_tag':
-            return await this.tools.removeTag((args as any)?.instancePath as string, (args as any)?.tagName as string);
+            return await this.tools.removeTag(toolArgs.instancePath as string, toolArgs.tagName as string);
           case 'get_tagged':
-            return await this.tools.getTagged((args as any)?.tagName as string);
+            return await this.tools.getTagged(toolArgs.tagName as string);
 
           case 'get_selection':
             return await this.tools.getSelection();
 
           case 'execute_luau':
-            return await this.tools.executeLuau((args as any)?.code as string);
+            return await this.tools.executeLuau(toolArgs.code as string);
 
           case 'start_playtest':
-            return await this.tools.startPlaytest((args as any)?.mode as string);
+            return await this.tools.startPlaytest(toolArgs.mode as string);
           case 'stop_playtest':
             return await this.tools.stopPlaytest();
           case 'get_playtest_output':
@@ -1117,8 +1174,10 @@ class RobloxStudioMCPServer {
     const port = this.parseEnvNumber('ROBLOX_STUDIO_PORT', 58741);
     const maxPortAttempts = this.parseEnvNumber('ROBLOX_STUDIO_PORT_RETRY_COUNT', 1);
     const host = process.env.ROBLOX_STUDIO_HOST || '0.0.0.0';
-    const httpApp = createHttpServer(this.tools, this.bridge) as BridgeHttpApp;
-    this.httpApp = httpApp;
+    const httpServer = createHttpServer(this.tools, this.bridge);
+    const httpApp = httpServer.app;
+    const runtime = httpServer.runtime;
+    this.httpApp = httpServer;
     this.bridgeMode = 'primary';
 
     try {
@@ -1141,16 +1200,17 @@ class RobloxStudioMCPServer {
       this.bridgeMode = 'proxy';
       this.bridge = new ProxyBridgeService(proxyBaseUrl);
       this.tools = new RobloxStudioTools(this.bridge);
-      httpApp.setConnectionMode('proxying');
+      runtime.setConnectionMode('proxying');
       console.error(`Port ${port} is busy. Running in proxy mode via ${proxyBaseUrl}`);
     }
 
     return { host, port, maxPortAttempts };
   }
 
-  private startPrimaryBridgeMonitoring(httpApp: BridgeHttpApp) {
-    httpApp.setMCPServerActive(true);
-    httpApp.setConnectionMode('direct');
+  private startPrimaryBridgeMonitoring(httpServer: BridgeHttpServer) {
+    const runtime = httpServer.runtime;
+    runtime.setMCPServerActive(true);
+    runtime.setConnectionMode('direct');
     console.error('MCP server marked as active');
     console.error('Waiting for Studio plugin to connect...');
 
@@ -1158,11 +1218,12 @@ class RobloxStudioMCPServer {
       clearInterval(this.bridgeStatusInterval);
     }
     this.bridgeStatusInterval = setInterval(() => {
-      httpApp.trackMCPActivity();
-      const pluginConnected = httpApp.isPluginConnected();
-      const mcpActive = httpApp.isMCPServerActive();
+      runtime.trackMCPActivity();
+      const pluginConnected = runtime.isPluginConnected();
+      const mcpActive = runtime.isMCPServerActive();
 
       if (pluginConnected && mcpActive) {
+        return;
       } else if (pluginConnected && !mcpActive) {
         console.error('Studio plugin connected, but MCP server inactive');
       } else if (!pluginConnected && mcpActive) {
@@ -1214,9 +1275,9 @@ class RobloxStudioMCPServer {
     try {
       const nextBridge = new BridgeService();
       const nextTools = new RobloxStudioTools(nextBridge);
-      const nextHttpApp = createHttpServer(nextTools, nextBridge) as BridgeHttpApp;
+      const nextHttpServer = createHttpServer(nextTools, nextBridge);
       const { port: boundPort } = await listenWithRetry(
-        nextHttpApp,
+        nextHttpServer.app,
         host,
         port,
         1,
@@ -1226,10 +1287,10 @@ class RobloxStudioMCPServer {
       );
 
       this.syncBridgeAcrossSessions(nextBridge);
-      this.httpApp = nextHttpApp;
+      this.httpApp = nextHttpServer;
       this.bridgeMode = 'primary';
       this.stopProxyPromotionMonitoring();
-      this.startPrimaryBridgeMonitoring(nextHttpApp);
+      this.startPrimaryBridgeMonitoring(nextHttpServer);
       console.error(`Proxy instance promoted to primary bridge on ${host}:${boundPort}`);
     } catch (error) {
       const err = error as NodeJS.ErrnoException;
@@ -1249,7 +1310,7 @@ class RobloxStudioMCPServer {
     this.proxyPromotionInterval = undefined;
   }
 
-  async connectTransport(transport: any) {
+  async connectTransport(transport: Parameters<Server['connect']>[0]) {
     await this.server.connect(transport);
   }
 
@@ -1278,7 +1339,7 @@ class RobloxStudioMCPServer {
 
     mcpApp.all(mcpPath, async (req, res) => {
       if (this.bridgeMode === 'primary') {
-        this.httpApp?.trackMCPActivity();
+        this.httpApp?.runtime.trackMCPActivity();
       }
 
       try {

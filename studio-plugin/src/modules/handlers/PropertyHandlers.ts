@@ -77,7 +77,24 @@ function massSetProperty(requestData: Record<string, unknown>) {
 		const instance = getInstanceByPath(path);
 		if (instance) {
 			const [success, err] = pcall(() => {
-				(instance as unknown as Record<string, unknown>)[propertyName] = propertyValue;
+				const inst = instance as unknown as Record<string, unknown>;
+				if (propertyName === "Parent" || propertyName === "PrimaryPart") {
+					if (!typeIs(propertyValue, "string")) {
+						error(`${propertyName} expects an instance path string`);
+					}
+					const refInstance = getInstanceByPath(propertyValue);
+					if (!refInstance) {
+						error(`${propertyName} instance not found: ${propertyValue}`);
+					}
+					inst[propertyName] = refInstance;
+				} else if (propertyName === "Name") {
+					instance.Name = tostring(propertyValue);
+				} else if (propertyName === "Source" && instance.IsA("LuaSourceContainer")) {
+					(instance as unknown as { Source: string }).Source = tostring(propertyValue);
+				} else {
+					const convertedValue = convertPropertyValue(instance, propertyName, propertyValue);
+					inst[propertyName] = convertedValue !== undefined ? convertedValue : propertyValue;
+				}
 			});
 			if (success) {
 				successCount++;

@@ -18,7 +18,7 @@ export class ProxyBridgeService extends BridgeService {
     this.proxyInstanceId = randomUUID();
   }
 
-  override async sendRequest(endpoint: string, data: any): Promise<any> {
+  override async sendRequest(endpoint: string, data: unknown): Promise<unknown> {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), this.proxyRequestTimeout);
 

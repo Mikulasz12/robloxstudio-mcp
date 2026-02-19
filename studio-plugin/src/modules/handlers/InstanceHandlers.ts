@@ -24,7 +24,31 @@ function createObject(requestData: Record<string, unknown>) {
 
 		for (const [propertyName, propertyValue] of pairs(properties)) {
 			pcall(() => {
-				(instance as unknown as { [key: string]: unknown })[propertyName as string] = propertyValue;
+				const propName = propertyName as string;
+				const inst = instance as unknown as Record<string, unknown>;
+
+				if (propName === "Parent" || propName === "PrimaryPart") {
+					if (typeIs(propertyValue, "string")) {
+						const refInstance = getInstanceByPath(propertyValue);
+						if (refInstance) {
+							inst[propName] = refInstance;
+						}
+					}
+					return;
+				}
+
+				if (propName === "Name") {
+					instance.Name = tostring(propertyValue);
+					return;
+				}
+
+				if (propName === "Source" && instance.IsA("LuaSourceContainer")) {
+					(instance as unknown as { Source: string }).Source = tostring(propertyValue);
+					return;
+				}
+
+				const converted = convertPropertyValue(instance, propName, propertyValue);
+				inst[propName] = converted !== undefined ? converted : propertyValue;
 			});
 		}
 

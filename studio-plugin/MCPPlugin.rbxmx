@@ -701,7 +701,27 @@ local function createObject(requestData)
 		end
 		for propertyName, propertyValue in pairs(properties) do
 			pcall(function()
-				instance[propertyName] = propertyValue
+				local propName = propertyName
+				local inst = instance
+				if propName == "Parent" or propName == "PrimaryPart" then
+					if type(propertyValue) == "string" then
+						local refInstance = getInstanceByPath(propertyValue)
+						if refInstance then
+							inst[propName] = refInstance
+						end
+					end
+					return nil
+				end
+				if propName == "Name" then
+					instance.Name = tostring(propertyValue)
+					return nil
+				end
+				if propName == "Source" and instance:IsA("LuaSourceContainer") then
+					instance.Source = tostring(propertyValue)
+					return nil
+				end
+				local converted = convertPropertyValue(instance, propName, propertyValue)
+				inst[propName] = if converted ~= nil then converted else propertyValue
 			end)
 		end
 		instance.Parent = parentInstance
@@ -1800,7 +1820,24 @@ local function massSetProperty(requestData)
 		local instance = getInstanceByPath(path)
 		if instance then
 			local success, err = pcall(function()
-				instance[propertyName] = propertyValue
+				local inst = instance
+				if propertyName == "Parent" or propertyName == "PrimaryPart" then
+					if not (type(propertyValue) == "string") then
+						error(`{propertyName} expects an instance path string`)
+					end
+					local refInstance = getInstanceByPath(propertyValue)
+					if not refInstance then
+						error(`{propertyName} instance not found: {propertyValue}`)
+					end
+					inst[propertyName] = refInstance
+				elseif propertyName == "Name" then
+					instance.Name = tostring(propertyValue)
+				elseif propertyName == "Source" and instance:IsA("LuaSourceContainer") then
+					instance.Source = tostring(propertyValue)
+				else
+					local convertedValue = convertPropertyValue(instance, propertyName, propertyValue)
+					inst[propertyName] = if convertedValue ~= nil then convertedValue else propertyValue
+				end
 			end)
 			if success then
 				successCount += 1

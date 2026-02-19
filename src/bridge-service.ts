@@ -3,10 +3,11 @@ import { v4 as uuidv4 } from 'uuid';
 interface PendingRequest {
   id: string;
   endpoint: string;
-  data: any;
+  data: unknown;
   timestamp: number;
-  resolve: (value: any) => void;
-  reject: (error: any) => void;
+  inFlight: boolean;
+  resolve: (value: unknown) => void;
+  reject: (error: unknown) => void;
   timeoutId: ReturnType<typeof setTimeout>;
 }
 
@@ -14,7 +15,7 @@ export class BridgeService {
   private pendingRequests: Map<string, PendingRequest> = new Map();
   private requestTimeout = 30000;
 
-  async sendRequest(endpoint: string, data: any): Promise<any> {
+  async sendRequest(endpoint: string, data: unknown): Promise<unknown> {
     const requestId = uuidv4();
 
     return new Promise((resolve, reject) => {
@@ -31,6 +32,7 @@ export class BridgeService {
         endpoint,
         data,
         timestamp: Date.now(),
+        inFlight: false,
         resolve,
         reject,
         timeoutId
@@ -40,7 +42,13 @@ export class BridgeService {
     });
   }
 
-  getPendingRequest(): { requestId: string; request: { endpoint: string; data: any } } | null {
+  getPendingRequest(): { requestId: string; request: { endpoint: string; data: unknown } } | null {
+    // Only allow one request to be actively dispatched to the plugin at a time.
+    for (const request of this.pendingRequests.values()) {
+      if (request.inFlight) {
+        return null;
+      }
+    }
 
     let oldestRequest: PendingRequest | null = null;
 
@@ -51,6 +59,7 @@ export class BridgeService {
     }
 
     if (oldestRequest) {
+      oldestRequest.inFlight = true;
       return {
         requestId: oldestRequest.id,
         request: {
@@ -63,7 +72,7 @@ export class BridgeService {
     return null;
   }
 
-  resolveRequest(requestId: string, response: any) {
+  resolveRequest(requestId: string, response: unknown) {
     const request = this.pendingRequests.get(requestId);
     if (request) {
       clearTimeout(request.timeoutId);
@@ -72,7 +81,7 @@ export class BridgeService {
     }
   }
 
-  rejectRequest(requestId: string, error: any) {
+  rejectRequest(requestId: string, error: unknown) {
     const request = this.pendingRequests.get(requestId);
     if (request) {
       clearTimeout(request.timeoutId);

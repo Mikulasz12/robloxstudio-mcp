@@ -1,18 +1,21 @@
 import request from 'supertest';
-import { createHttpServer } from '../http-server';
+import { createHttpServer, type BridgeRuntimeState } from '../http-server';
 import { RobloxStudioTools } from '../tools/index';
 import { BridgeService } from '../bridge-service';
 import { Application } from 'express';
 
 describe('HTTP Server', () => {
-  let app: Application & any;
+  let app: Application;
+  let runtime: BridgeRuntimeState;
   let bridge: BridgeService;
   let tools: RobloxStudioTools;
 
   beforeEach(() => {
     bridge = new BridgeService();
     tools = new RobloxStudioTools(bridge);
-    app = createHttpServer(tools, bridge);
+    const httpServer = createHttpServer(tools, bridge);
+    app = httpServer.app;
+    runtime = httpServer.runtime;
   });
 
   afterEach(() => {
@@ -42,20 +45,20 @@ describe('HTTP Server', () => {
         .expect(200);
 
       expect(response.body).toEqual({ success: true });
-      expect(app.isPluginConnected()).toBe(true);
+      expect(runtime.isPluginConnected()).toBe(true);
     });
 
     test('should handle plugin disconnect', async () => {
 
       await request(app).post('/ready').expect(200);
-      expect(app.isPluginConnected()).toBe(true);
+      expect(runtime.isPluginConnected()).toBe(true);
 
       const response = await request(app)
         .post('/disconnect')
         .expect(200);
 
       expect(response.body).toEqual({ success: true });
-      expect(app.isPluginConnected()).toBe(false);
+      expect(runtime.isPluginConnected()).toBe(false);
     });
 
     test('should clear pending requests on disconnect', async () => {
@@ -75,12 +78,12 @@ describe('HTTP Server', () => {
     test('should timeout plugin connection after inactivity', async () => {
 
       await request(app).post('/ready').expect(200);
-      expect(app.isPluginConnected()).toBe(true);
+      expect(runtime.isPluginConnected()).toBe(true);
 
       const originalDateNow = Date.now;
       Date.now = jest.fn(() => originalDateNow() + 11000);
 
-      expect(app.isPluginConnected()).toBe(false);
+      expect(runtime.isPluginConnected()).toBe(false);
 
       Date.now = originalDateNow;
     });
@@ -102,7 +105,7 @@ describe('HTTP Server', () => {
 
     test('should return pending request when MCP is active', async () => {
 
-      app.setMCPServerActive(true);
+      runtime.setMCPServerActive(true);
 
       const pendingRequest = bridge.sendRequest('/api/test', { data: 'test' });
       pendingRequest.catch(() => {});
@@ -124,7 +127,7 @@ describe('HTTP Server', () => {
 
     test('should return null request when no pending requests', async () => {
 
-      app.setMCPServerActive(true);
+      runtime.setMCPServerActive(true);
 
       const response = await request(app)
         .get('/poll')
@@ -138,15 +141,15 @@ describe('HTTP Server', () => {
     });
 
     test('should mark plugin as connected when polling', async () => {
-      expect(app.isPluginConnected()).toBe(false);
+      expect(runtime.isPluginConnected()).toBe(false);
 
       await request(app).get('/poll').expect(503);
 
-      expect(app.isPluginConnected()).toBe(true);
+      expect(runtime.isPluginConnected()).toBe(true);
     });
 
     test('should reject poll from different studio instance when bridge is already bound', async () => {
-      app.setMCPServerActive(true);
+      runtime.setMCPServerActive(true);
 
       await request(app)
         .post('/ready')
@@ -177,7 +180,6 @@ describe('HTTP Server', () => {
 
   describe('Response Handling', () => {
     test('should handle successful response', async () => {
-      const requestId = 'test-request-id';
       const responseData = { result: 'success' };
 
       const requestPromise = bridge.sendRequest('/api/test', {});
@@ -267,7 +269,7 @@ describe('HTTP Server', () => {
     });
 
     test('should keep reporting proxying mode after proxied activity', async () => {
-      app.setMCPServerActive(true);
+      runtime.setMCPServerActive(true);
 
       const proxyRequest = new Promise<request.Response>((resolve, reject) => {
         request(app)
@@ -316,7 +318,7 @@ describe('HTTP Server', () => {
     });
 
     test('should report active proxied instance count', async () => {
-      app.setMCPServerActive(true);
+      runtime.setMCPServerActive(true);
 
       const sendProxiedRequest = async (proxyInstanceId: string) => {
         const proxyRequest = new Promise<request.Response>((resolve, reject) => {
@@ -373,7 +375,7 @@ describe('HTTP Server', () => {
     test('should forward start and end lines for get_script_source', async () => {
       const getScriptSourceSpy = jest
         .spyOn(tools, 'getScriptSource')
-        .mockResolvedValue({ content: [{ type: 'text', text: '{}' }] } as any);
+        .mockResolvedValue({ content: [{ type: 'text', text: '{}' }] } as Awaited<ReturnType<RobloxStudioTools['getScriptSource']>>);
 
       await request(app)
         .post('/mcp/get_script_source')
@@ -394,22 +396,22 @@ describe('HTTP Server', () => {
 
   describe('MCP Server State Management', () => {
     test('should track MCP server activity', async () => {
-      app.setMCPServerActive(true);
-      expect(app.isMCPServerActive()).toBe(true);
+      runtime.setMCPServerActive(true);
+      expect(runtime.isMCPServerActive()).toBe(true);
 
-      app.trackMCPActivity();
+      runtime.trackMCPActivity();
 
-      expect(app.isMCPServerActive()).toBe(true);
+      expect(runtime.isMCPServerActive()).toBe(true);
     });
 
     test('should timeout MCP server after inactivity', async () => {
-      app.setMCPServerActive(true);
-      expect(app.isMCPServerActive()).toBe(true);
+      runtime.setMCPServerActive(true);
+      expect(runtime.isMCPServerActive()).toBe(true);
 
       const originalDateNow = Date.now;
       Date.now = jest.fn(() => originalDateNow() + 16000);
 
-      expect(app.isMCPServerActive()).toBe(false);
+      expect(runtime.isMCPServerActive()).toBe(false);
 
       Date.now = originalDateNow;
     });
@@ -419,7 +421,7 @@ describe('HTTP Server', () => {
     test('should return current status', async () => {
 
       await request(app).post('/ready').expect(200);
-      app.setMCPServerActive(true);
+      runtime.setMCPServerActive(true);
 
       const response = await request(app)
         .get('/status')
@@ -434,3 +436,5 @@ describe('HTTP Server', () => {
     });
   });
 });
+
+

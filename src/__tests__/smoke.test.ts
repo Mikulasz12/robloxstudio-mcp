@@ -13,7 +13,8 @@ describe('Smoke Tests - Connection Fixes', () => {
   test('HTTP server should start and respond to health check', async () => {
     const bridge = new BridgeService();
     const tools = new RobloxStudioTools(bridge);
-    const app = createHttpServer(tools, bridge);
+    const httpServer = createHttpServer(tools, bridge);
+    const app = httpServer.app;
 
     const response = await request(app)
       .get('/health')
@@ -42,7 +43,8 @@ describe('Smoke Tests - Connection Fixes', () => {
   test('Disconnect endpoint should clear pending requests', async () => {
     const bridge = new BridgeService();
     const tools = new RobloxStudioTools(bridge);
-    const app = createHttpServer(tools, bridge);
+    const httpServer = createHttpServer(tools, bridge);
+    const app = httpServer.app;
 
     const pendingPromise = bridge.sendRequest('/test', { data: 'test' });
     pendingPromise.catch(() => {});
@@ -57,14 +59,16 @@ describe('Smoke Tests - Connection Fixes', () => {
   test('Connection states should update correctly', async () => {
     const bridge = new BridgeService();
     const tools = new RobloxStudioTools(bridge);
-    const app = createHttpServer(tools, bridge) as any;
+    const httpServer = createHttpServer(tools, bridge);
+    const app = httpServer.app;
+    const runtime = httpServer.runtime;
 
-    expect(app.isPluginConnected()).toBe(false);
+    expect(runtime.isPluginConnected()).toBe(false);
 
     await request(app).post('/ready').expect(200);
-    expect(app.isPluginConnected()).toBe(true);
+    expect(runtime.isPluginConnected()).toBe(true);
 
     await request(app).post('/disconnect').expect(200);
-    expect(app.isPluginConnected()).toBe(false);
+    expect(runtime.isPluginConnected()).toBe(false);
   });
 });

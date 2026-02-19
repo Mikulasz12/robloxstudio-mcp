@@ -3,6 +3,8 @@ import cors from 'cors';
 import { RobloxStudioTools } from './tools/index.js';
 import { BridgeService } from './bridge-service.js';
 
+export type ConnectionMode = 'direct' | 'proxying';
+
 interface StudioIdentity {
   studioInstanceId?: string;
   placeId?: string;
@@ -15,9 +17,22 @@ interface BoundStudioIdentity {
   placeName?: string;
 }
 
-export function createHttpServer(tools: RobloxStudioTools, bridge: BridgeService) {
+export interface BridgeRuntimeState {
+  isPluginConnected: () => boolean;
+  setMCPServerActive: (active: boolean) => void;
+  isMCPServerActive: () => boolean;
+  trackMCPActivity: () => void;
+  setConnectionMode: (mode: ConnectionMode) => void;
+  getConnectionMode: () => ConnectionMode;
+}
+
+export interface BridgeHttpServer {
+  app: express.Express;
+  runtime: BridgeRuntimeState;
+}
+
+export function createHttpServer(tools: RobloxStudioTools, bridge: BridgeService): BridgeHttpServer {
   const app = express();
-  type ConnectionMode = 'direct' | 'proxying';
   const LEGACY_PROXY_INSTANCE_ID = '__legacy_proxy_instance__';
   let pluginConnected = false;
   let mcpServerActive = false;
@@ -683,12 +698,15 @@ export function createHttpServer(tools: RobloxStudioTools, bridge: BridgeService
   });
 
 
-  (app as any).isPluginConnected = isPluginConnected;
-  (app as any).setMCPServerActive = setMCPServerActive;
-  (app as any).isMCPServerActive = isMCPServerActive;
-  (app as any).trackMCPActivity = trackMCPActivity;
-  (app as any).setConnectionMode = setConnectionMode;
-  (app as any).getConnectionMode = getConnectionMode;
-
-  return app;
+  return {
+    app,
+    runtime: {
+      isPluginConnected,
+      setMCPServerActive,
+      isMCPServerActive,
+      trackMCPActivity,
+      setConnectionMode,
+      getConnectionMode,
+    },
+  };
 }

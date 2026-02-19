@@ -157,7 +157,7 @@ export class RobloxStudioTools {
 
 
 
-  async setProperty(instancePath: string, propertyName: string, propertyValue: any) {
+  async setProperty(instancePath: string, propertyName: string, propertyValue: unknown) {
     if (!instancePath || !propertyName) {
       throw new Error('Instance path and property name are required for set_property');
     }
@@ -176,7 +176,7 @@ export class RobloxStudioTools {
     };
   }
 
-  async massSetProperty(paths: string[], propertyName: string, propertyValue: any) {
+  async massSetProperty(paths: string[], propertyName: string, propertyValue: unknown) {
     if (!paths || paths.length === 0 || !propertyName) {
       throw new Error('Paths array and property name are required for mass_set_property');
     }
@@ -233,7 +233,7 @@ export class RobloxStudioTools {
     };
   }
 
-  async createObjectWithProperties(className: string, parent: string, name?: string, properties?: Record<string, any>) {
+  async createObjectWithProperties(className: string, parent: string, name?: string, properties?: Record<string, unknown>) {
     if (!className || !parent) {
       throw new Error('Class name and parent are required for create_object_with_properties');
     }
@@ -268,7 +268,7 @@ export class RobloxStudioTools {
     };
   }
 
-  async massCreateObjectsWithProperties(objects: Array<{className: string, parent: string, name?: string, properties?: Record<string, any>}>) {
+  async massCreateObjectsWithProperties(objects: Array<{className: string, parent: string, name?: string, properties?: Record<string, unknown>}>) {
     if (!objects || objects.length === 0) {
       throw new Error('Objects array is required for mass_create_objects_with_properties');
     }
@@ -307,7 +307,7 @@ export class RobloxStudioTools {
       positionOffset?: [number, number, number];
       rotationOffset?: [number, number, number];
       scaleOffset?: [number, number, number];
-      propertyVariations?: Record<string, any[]>;
+      propertyVariations?: Record<string, unknown[]>;
       targetParents?: string[];
     }
   ) {
@@ -338,7 +338,7 @@ export class RobloxStudioTools {
         positionOffset?: [number, number, number];
         rotationOffset?: [number, number, number];
         scaleOffset?: [number, number, number];
-        propertyVariations?: Record<string, any[]>;
+        propertyVariations?: Record<string, unknown[]>;
         targetParents?: string[];
       }
     }>
@@ -362,7 +362,7 @@ export class RobloxStudioTools {
     paths: string[],
     propertyName: string,
     formula: string,
-    variables?: Record<string, any>
+    variables?: Record<string, unknown>
   ) {
     if (!paths || paths.length === 0 || !propertyName || !formula) {
       throw new Error('Paths, property name, and formula are required for set_calculated_property');
@@ -388,7 +388,7 @@ export class RobloxStudioTools {
     paths: string[],
     propertyName: string,
     operation: 'add' | 'multiply' | 'divide' | 'subtract' | 'power',
-    value: any,
+    value: unknown,
     component?: 'X' | 'Y' | 'Z' | 'XScale' | 'XOffset' | 'YScale' | 'YOffset'
   ) {
     if (!paths || paths.length === 0 || !propertyName || !operation || value === undefined) {
@@ -504,7 +504,7 @@ export class RobloxStudioTools {
     };
   }
 
-  async setAttribute(instancePath: string, attributeName: string, attributeValue: any, valueType?: string) {
+  async setAttribute(instancePath: string, attributeName: string, attributeValue: unknown, valueType?: string) {
     if (!instancePath || !attributeName) {
       throw new Error('Instance path and attribute name are required for set_attribute');
     }

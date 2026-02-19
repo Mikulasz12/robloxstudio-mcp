@@ -7,7 +7,7 @@ export class StudioHttpClient {
     this.bridge = bridge;
   }
 
-  async request(endpoint: string, data: any): Promise<any> {
+  async request(endpoint: string, data: unknown): Promise<unknown> {
     try {
       const response = await this.bridge.sendRequest(endpoint, data);
       return response;

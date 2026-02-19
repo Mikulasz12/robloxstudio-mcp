@@ -1,18 +1,21 @@
 import request from 'supertest';
-import { createHttpServer } from '../http-server';
+import { createHttpServer, type BridgeRuntimeState } from '../http-server';
 import { RobloxStudioTools } from '../tools/index';
 import { BridgeService } from '../bridge-service';
 import { Application } from 'express';
 
 describe('Integration Tests', () => {
-  let app: Application & any;
+  let app: Application;
+  let runtime: BridgeRuntimeState;
   let bridge: BridgeService;
   let tools: RobloxStudioTools;
 
   beforeEach(() => {
     bridge = new BridgeService();
     tools = new RobloxStudioTools(bridge);
-    app = createHttpServer(tools, bridge);
+    const httpServer = createHttpServer(tools, bridge);
+    app = httpServer.app;
+    runtime = httpServer.runtime;
   });
 
   afterEach(() => {
@@ -40,7 +43,7 @@ describe('Integration Tests', () => {
         mcpConnected: false
       });
 
-      app.setMCPServerActive(true);
+      runtime.setMCPServerActive(true);
 
       status = await request(app).get('/status').expect(200);
       expect(status.body.pluginConnected).toBe(true);
@@ -65,7 +68,7 @@ describe('Integration Tests', () => {
     test('should handle complete request/response cycle', async () => {
 
       await request(app).post('/ready').expect(200);
-      app.setMCPServerActive(true);
+      runtime.setMCPServerActive(true);
 
       const mcpRequestPromise = bridge.sendRequest('/api/test-endpoint', {
         testData: 'hello',
@@ -105,7 +108,7 @@ describe('Integration Tests', () => {
     test('should handle error responses', async () => {
 
       await request(app).post('/ready').expect(200);
-      app.setMCPServerActive(true);
+      runtime.setMCPServerActive(true);
 
       const mcpRequestPromise = bridge.sendRequest('/api/failing-endpoint', {});
       mcpRequestPromise.catch(() => {});
@@ -129,7 +132,7 @@ describe('Integration Tests', () => {
     test('should handle disconnect and reconnect gracefully', async () => {
 
       await request(app).post('/ready').expect(200);
-      app.setMCPServerActive(true);
+      runtime.setMCPServerActive(true);
 
       const request1 = bridge.sendRequest('/api/test1', {});
       const request2 = bridge.sendRequest('/api/test2', {});
@@ -177,7 +180,7 @@ describe('Integration Tests', () => {
       expect(health.body.pluginConnected).toBe(true);
       expect(health.body.mcpServerActive).toBe(false);
 
-      app.setMCPServerActive(true);
+      runtime.setMCPServerActive(true);
 
       const poll = await request(app).get('/poll').expect(200);
       expect(poll.body.mcpConnected).toBe(true);
@@ -190,7 +193,7 @@ describe('Integration Tests', () => {
       jest.useFakeTimers();
 
       await request(app).post('/ready').expect(200);
-      app.setMCPServerActive(true);
+      runtime.setMCPServerActive(true);
 
       const timeoutPromise = bridge.sendRequest('/api/slow-endpoint', {});
 
