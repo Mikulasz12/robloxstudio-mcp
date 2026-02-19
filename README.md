@@ -16,17 +16,17 @@ An MCP server that lets AI explore your game structure, read/edit scripts, and p
 2. Enable **Allow HTTP Requests** in Experience Settings > Security
 3. Connect your AI client
 
-**Claude:**
+**Claude Code:**
 ```bash
 claude mcp add robloxstudio -- npx -y robloxstudio-mcp@latest
 ```
 
-**Codex:**
+**Codex CLI:**
 ```bash
 codex mcp add robloxstudio -- npx -y robloxstudio-mcp@latest
 ```
 
-**Gemini:**
+**Gemini CLI:**
 ```bash
 gemini mcp add robloxstudio npx --trust -- -y robloxstudio-mcp@latest
 ```
