@@ -5,6 +5,7 @@ interface PendingRequest {
   endpoint: string;
   data: any;
   timestamp: number;
+  inFlight: boolean;
   resolve: (value: any) => void;
   reject: (error: any) => void;
   timeoutId: ReturnType<typeof setTimeout>;
@@ -31,6 +32,7 @@ export class BridgeService {
         endpoint,
         data,
         timestamp: Date.now(),
+        inFlight: false,
         resolve,
         reject,
         timeoutId
@@ -41,6 +43,12 @@ export class BridgeService {
   }
 
   getPendingRequest(): { requestId: string; request: { endpoint: string; data: any } } | null {
+    // Only allow one request to be actively dispatched to the plugin at a time.
+    for (const request of this.pendingRequests.values()) {
+      if (request.inFlight) {
+        return null;
+      }
+    }
 
     let oldestRequest: PendingRequest | null = null;
 
@@ -51,6 +59,7 @@ export class BridgeService {
     }
 
     if (oldestRequest) {
+      oldestRequest.inFlight = true;
       return {
         requestId: oldestRequest.id,
         request: {

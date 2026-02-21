@@ -1,4 +1,4 @@
-import { HttpService, RunService } from "@rbxts/services";
+import { HttpService, MarketplaceService, RunService } from "@rbxts/services";
 import State from "./State";
 import Utils from "./Utils";
 import UI from "./UI";
@@ -13,9 +13,18 @@ import AssetHandlers from "./handlers/AssetHandlers";
 import CaptureHandlers from "./handlers/CaptureHandlers";
 import InputHandlers from "./handlers/InputHandlers";
 import RenderHandlers from "./handlers/RenderHandlers";
-import { Connection, RequestPayload, PollResponse } from "../types";
+import { Connection, RequestPayload, PollResponse, StudioMismatchResponse } from "../types";
 
 type Handler = (data: Record<string, unknown>) => unknown;
+const STUDIO_INSTANCE_ID = (() => {
+	const [ok, debugId] = pcall(() => game.GetDebugId(16));
+	if (ok && type(debugId) === "string" && debugId.size() > 0) {
+		return debugId;
+	}
+	return HttpService.GenerateGUID(false);
+})();
+let cachedPlaceName: string | undefined;
+let attemptedPlaceNameLookup = false;
 
 const routeMap: Record<string, Handler> = {
 
@@ -97,15 +106,93 @@ function processRequest(request: RequestPayload): unknown {
 	}
 }
 
+function getStudioIdentityPayload() {
+	const placeId = tostring(game.PlaceId);
+
+	if (!attemptedPlaceNameLookup) {
+		attemptedPlaceNameLookup = true;
+
+		if (game.PlaceId > 0) {
+			const [ok, productInfo] = pcall(() => MarketplaceService.GetProductInfo(game.PlaceId));
+			if (ok && type(productInfo.Name) === "string" && productInfo.Name.size() > 0) {
+				cachedPlaceName = productInfo.Name;
+			}
+		}
+	}
+
+	return {
+		studioInstanceId: STUDIO_INSTANCE_ID,
+		placeId,
+		placeName: cachedPlaceName ?? placeId,
+	};
+}
+
+function getPollUrl(conn: Connection): string {
+	const identity = getStudioIdentityPayload();
+	const queryParts = [
+		`studioInstanceId=${HttpService.UrlEncode(identity.studioInstanceId)}`,
+		`placeId=${HttpService.UrlEncode(identity.placeId)}`,
+	];
+	if (identity.placeName !== undefined) {
+		queryParts.push(`placeName=${HttpService.UrlEncode(identity.placeName)}`);
+	}
+	const query = queryParts.join("&");
+	return `${conn.serverUrl}/poll?${query}`;
+}
+
 function sendResponse(conn: Connection, requestId: string, responseData: unknown) {
+	const identity = getStudioIdentityPayload();
 	pcall(() => {
 		HttpService.RequestAsync({
 			Url: `${conn.serverUrl}/response`,
 			Method: "POST",
 			Headers: { "Content-Type": "application/json" },
-			Body: HttpService.JSONEncode({ requestId, response: responseData }),
+			Body: HttpService.JSONEncode({
+				requestId,
+				response: responseData,
+				studioInstanceId: identity.studioInstanceId,
+				placeId: identity.placeId,
+				placeName: identity.placeName,
+			}),
 		});
 	});
+}
+
+function parseMismatchResponse(body: string): StudioMismatchResponse | undefined {
+	const [ok, parsed] = pcall(() => HttpService.JSONDecode(body) as StudioMismatchResponse);
+	if (ok) return parsed;
+	return undefined;
+}
+
+function applyStudioMismatchState(connIndex: number, body: string) {
+	const conn = State.getConnection(connIndex);
+	if (!conn) return;
+
+	conn.lastHttpOk = true;
+	const mismatch = parseMismatchResponse(body);
+	const expectedPlace = mismatch?.expected?.placeName ?? mismatch?.expected?.placeId ?? "another Studio instance";
+	const gotPlace = mismatch?.got?.placeName ?? mismatch?.got?.placeId ?? game.Name;
+
+	if (connIndex === State.getActiveTabIndex()) {
+		const el = UI.getElements();
+		el.statusLabel.Text = "Connected to different Studio instance";
+		el.statusLabel.TextColor3 = Color3.fromRGB(245, 158, 11);
+		el.statusIndicator.BackgroundColor3 = Color3.fromRGB(245, 158, 11);
+		el.statusPulse.BackgroundColor3 = Color3.fromRGB(245, 158, 11);
+		el.statusText.Text = "MISMATCH";
+		el.detailStatusLabel.Text = `Expected: ${expectedPlace}  Got: ${gotPlace}`;
+		el.detailStatusLabel.TextColor3 = Color3.fromRGB(245, 158, 11);
+		el.step1Dot.BackgroundColor3 = Color3.fromRGB(34, 197, 94);
+		el.step1Label.Text = "HTTP server (OK)";
+		el.step2Dot.BackgroundColor3 = Color3.fromRGB(245, 158, 11);
+		el.step2Label.Text = "MCP bridge (instance mismatch)";
+		el.step3Dot.BackgroundColor3 = Color3.fromRGB(245, 158, 11);
+		el.step3Label.Text = "Commands (blocked)";
+		el.troubleshootLabel.Text = "This bridge is bound to another Studio instance. Use the correct port for this project.";
+		el.troubleshootLabel.Visible = true;
+		conn.mcpWaitStartTime = undefined;
+		UI.stopPulseAnimation();
+	}
 }
 
 function getConnectionStatus(connIndex: number): string {
@@ -125,7 +212,7 @@ function pollForRequests(connIndex: number) {
 
 	const [success, result] = pcall(() => {
 		return HttpService.RequestAsync({
-			Url: `${conn.serverUrl}/poll`,
+			Url: getPollUrl(conn),
 			Method: "GET",
 			Headers: { "Content-Type": "application/json" },
 		});
@@ -136,13 +223,19 @@ function pollForRequests(connIndex: number) {
 	const ui = UI.getElements();
 	UI.updateTabDot(connIndex);
 
-	if (success && (result.Success || result.StatusCode === 503)) {
+	if (success && result.StatusCode === 409) {
+		applyStudioMismatchState(connIndex, result.Body);
+	} else if (success && (result.Success || result.StatusCode === 503)) {
 		conn.consecutiveFailures = 0;
 		conn.currentRetryDelay = 0.5;
 		conn.lastSuccessfulConnection = tick();
 
 		const data = HttpService.JSONDecode(result.Body) as PollResponse;
 		const mcpConnected = data.mcpConnected === true;
+		const isProxying = data.connectionMode === "proxying";
+		const rawProxyInstanceCount = data.proxyInstanceCount;
+		const proxyInstanceCount = math.max(1, math.floor(tonumber(rawProxyInstanceCount) ?? 1));
+		const proxyInstanceLabel = proxyInstanceCount === 1 ? "1 instance" : `${proxyInstanceCount} instances`;
 		conn.lastHttpOk = true;
 
 		if (connIndex === State.getActiveTabIndex()) {
@@ -150,7 +243,7 @@ function pollForRequests(connIndex: number) {
 			el.step1Dot.BackgroundColor3 = Color3.fromRGB(34, 197, 94);
 			el.step1Label.Text = "HTTP server (OK)";
 
-			if (mcpConnected && !el.statusLabel.Text.find("Connected")[0]) {
+			if (mcpConnected) {
 				el.statusLabel.Text = "Connected";
 				el.statusLabel.TextColor3 = Color3.fromRGB(34, 197, 94);
 				el.statusIndicator.BackgroundColor3 = Color3.fromRGB(34, 197, 94);
@@ -159,7 +252,7 @@ function pollForRequests(connIndex: number) {
 				el.detailStatusLabel.Text = "HTTP: OK  MCP: OK";
 				el.detailStatusLabel.TextColor3 = Color3.fromRGB(34, 197, 94);
 				el.step2Dot.BackgroundColor3 = Color3.fromRGB(34, 197, 94);
-				el.step2Label.Text = "MCP bridge (OK)";
+				el.step2Label.Text = isProxying ? `MCP bridge (proxying ${proxyInstanceLabel})` : "MCP bridge (OK)";
 				el.step3Dot.BackgroundColor3 = Color3.fromRGB(34, 197, 94);
 				el.step3Label.Text = "Commands (OK)";
 				conn.mcpWaitStartTime = undefined;
@@ -317,6 +410,39 @@ function discoverPort(): number | undefined {
 	return firstActivePort;
 }
 
+function findActiveConnectionIndexByServerUrl(serverUrl: string, excludeIndex: number): number | undefined {
+	for (let i = 0; i < State.getConnections().size(); i++) {
+		if (i === excludeIndex) continue;
+		const other = State.getConnections()[i];
+		if (other && other.isActive && other.serverUrl === serverUrl) {
+			return i;
+		}
+	}
+	return undefined;
+}
+
+function applyDuplicateConnectionState(connIndex: number, duplicateIndex: number, serverUrl: string) {
+	if (connIndex !== State.getActiveTabIndex()) return;
+
+	const el = UI.getElements();
+	el.statusLabel.Text = "Bridge already active in another tab";
+	el.statusLabel.TextColor3 = Color3.fromRGB(245, 158, 11);
+	el.statusIndicator.BackgroundColor3 = Color3.fromRGB(245, 158, 11);
+	el.statusPulse.BackgroundColor3 = Color3.fromRGB(245, 158, 11);
+	el.statusText.Text = "DUPLICATE";
+	el.detailStatusLabel.Text = `URL: ${serverUrl}`;
+	el.detailStatusLabel.TextColor3 = Color3.fromRGB(245, 158, 11);
+	el.step1Dot.BackgroundColor3 = Color3.fromRGB(245, 158, 11);
+	el.step1Label.Text = "HTTP server (duplicate tab)";
+	el.step2Dot.BackgroundColor3 = Color3.fromRGB(245, 158, 11);
+	el.step2Label.Text = "MCP bridge (already active)";
+	el.step3Dot.BackgroundColor3 = Color3.fromRGB(245, 158, 11);
+	el.step3Label.Text = "Commands (blocked)";
+	el.troubleshootLabel.Text = `This bridge is already active in tab ${duplicateIndex + 1}. Use a different port for concurrent workflows.`;
+	el.troubleshootLabel.Visible = true;
+	UI.stopPulseAnimation();
+}
+
 function activatePlugin(connIndex?: number) {
 	const idx = connIndex ?? State.getActiveTabIndex();
 	const conn = State.getConnection(idx);
@@ -324,26 +450,46 @@ function activatePlugin(connIndex?: number) {
 
 	const ui = UI.getElements();
 
-	conn.isActive = true;
-	conn.consecutiveFailures = 0;
-	conn.currentRetryDelay = 0.5;
-	ui.screenGui.Enabled = true;
-
 	if (idx === State.getActiveTabIndex()) {
 		conn.serverUrl = ui.urlInput.Text;
 		const [portStr] = conn.serverUrl.match(":(%d+)$");
 		if (portStr) conn.port = tonumber(portStr) ?? conn.port;
+	}
+
+	const duplicateConnectionIndex = findActiveConnectionIndexByServerUrl(conn.serverUrl, idx);
+	if (duplicateConnectionIndex !== undefined) {
+		conn.isActive = false;
+		conn.consecutiveFailures = 0;
+		conn.currentRetryDelay = 0.5;
+		applyDuplicateConnectionState(idx, duplicateConnectionIndex, conn.serverUrl);
+		UI.updateTabDot(idx);
+		return;
+	}
+
+	conn.isActive = true;
+	conn.consecutiveFailures = 0;
+	conn.currentRetryDelay = 0.5;
+	ui.screenGui.Enabled = true;
+	if (idx === State.getActiveTabIndex()) {
 		UI.updateUIState();
 	}
 	UI.updateTabDot(idx);
 
+	const defaultBaseUrl = `http://localhost:${State.BASE_PORT}`;
+	const shouldAutoDiscover = conn.serverUrl === defaultBaseUrl;
 	task.spawn(() => {
-		const discoveredPort = discoverPort();
-		if (discoveredPort !== undefined) {
-			conn.port = discoveredPort;
-			conn.serverUrl = `http://localhost:${discoveredPort}`;
-			if (idx === State.getActiveTabIndex()) {
-				ui.urlInput.Text = conn.serverUrl;
+		if (shouldAutoDiscover) {
+			const discoveredPort = discoverPort();
+			if (discoveredPort !== undefined) {
+				const discoveredUrl = `http://localhost:${discoveredPort}`;
+				const duplicateIndex = findActiveConnectionIndexByServerUrl(discoveredUrl, idx);
+				if (duplicateIndex === undefined) {
+					conn.port = discoveredPort;
+					conn.serverUrl = discoveredUrl;
+					if (idx === State.getActiveTabIndex()) {
+						ui.urlInput.Text = conn.serverUrl;
+					}
+				}
 			}
 		}
 
@@ -359,11 +505,18 @@ function activatePlugin(connIndex?: number) {
 		}
 
 		pcall(() => {
+			const identity = getStudioIdentityPayload();
 			HttpService.RequestAsync({
 				Url: `${conn.serverUrl}/ready`,
 				Method: "POST",
 				Headers: { "Content-Type": "application/json" },
-				Body: HttpService.JSONEncode({ pluginReady: true, timestamp: tick() }),
+				Body: HttpService.JSONEncode({
+					pluginReady: true,
+					timestamp: tick(),
+					studioInstanceId: identity.studioInstanceId,
+					placeId: identity.placeId,
+					placeName: identity.placeName,
+				}),
 			});
 		});
 	});
@@ -380,11 +533,17 @@ function deactivatePlugin(connIndex?: number) {
 	UI.updateTabDot(idx);
 
 	pcall(() => {
+		const identity = getStudioIdentityPayload();
 		HttpService.RequestAsync({
 			Url: `${conn.serverUrl}/disconnect`,
 			Method: "POST",
 			Headers: { "Content-Type": "application/json" },
-			Body: HttpService.JSONEncode({ timestamp: tick() }),
+			Body: HttpService.JSONEncode({
+				timestamp: tick(),
+				studioInstanceId: identity.studioInstanceId,
+				placeId: identity.placeId,
+				placeName: identity.placeName,
+			}),
 		});
 	});
 

@@ -1,55 +1,82 @@
 import { BridgeService } from './bridge-service.js';
-import { v4 as uuidv4 } from 'uuid';
+import { randomUUID } from 'crypto';
+
+interface ProxyResponseBody {
+  response?: unknown;
+  error?: unknown;
+}
 
 export class ProxyBridgeService extends BridgeService {
-  private primaryBaseUrl: string;
-  readonly proxyInstanceId: string;
-  private proxyRequestTimeout = 30000;
+  private readonly proxyUrl: string;
+  private readonly proxyRequestTimeout: number;
+  private readonly proxyInstanceId: string;
 
-  constructor(primaryBaseUrl: string) {
+  constructor(baseUrl: string, requestTimeout: number = 30000) {
     super();
-    this.primaryBaseUrl = primaryBaseUrl;
-    this.proxyInstanceId = uuidv4();
+    this.proxyUrl = `${baseUrl.replace(/\/+$/, '')}/proxy`;
+    this.proxyRequestTimeout = requestTimeout;
+    this.proxyInstanceId = randomUUID();
   }
 
-  override async sendRequest(endpoint: string, data: any): Promise<any> {
+  override async sendRequest(endpoint: string, data: unknown): Promise<unknown> {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), this.proxyRequestTimeout);
 
     try {
-      const response = await fetch(`${this.primaryBaseUrl}/proxy`, {
+      const response = await fetch(this.proxyUrl, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+        },
         body: JSON.stringify({ endpoint, data, proxyInstanceId: this.proxyInstanceId }),
         signal: controller.signal,
       });
 
-      clearTimeout(timeoutId);
+      let payload: ProxyResponseBody = {};
+      try {
+        payload = await response.json() as ProxyResponseBody;
+      } catch {
+        payload = {};
+      }
 
       if (!response.ok) {
-        const body = await response.text();
-        throw new Error(`Proxy request failed (${response.status}): ${body}`);
+        const errorMessage = payload.error ? String(payload.error) : `Proxy request failed with status ${response.status}`;
+        throw new Error(errorMessage);
       }
 
-      const result = await response.json() as { response?: any; error?: string };
-      if (result.error) {
-        throw new Error(result.error);
+      if (payload.error !== undefined) {
+        throw new Error(String(payload.error));
       }
-      return result.response;
-    } catch (err: any) {
+
+      return payload.response;
+    } catch (error) {
+      const isAbortError = typeof error === 'object'
+        && error !== null
+        && 'name' in error
+        && (error as { name: string }).name === 'AbortError';
+
+      if (isAbortError) {
+        throw new Error('Request timeout');
+      }
+
+      if (error instanceof Error) {
+        if (error.message === 'Request timeout') {
+          throw error;
+        }
+        throw new Error(`Proxy request failed: ${error.message}`);
+      }
+
+      throw error;
+    } finally {
       clearTimeout(timeoutId);
-      if (err.name === 'AbortError') {
-        throw new Error('Proxy request timeout');
-      }
-      throw err;
     }
   }
 
-  override cleanupOldRequests(): void {
-    // No-op: primary bridge owns the pending request state
+  override cleanupOldRequests() {
+    return;
   }
 
-  override clearAllPendingRequests(): void {
-    // No-op: primary bridge owns the pending request state
+  override clearAllPendingRequests() {
+    return;
   }
 }

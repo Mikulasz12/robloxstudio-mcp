@@ -283,9 +283,73 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     }
   },
   {
+    name: 'create_object_with_properties',
+    category: 'write',
+    description: 'Create a new instance with optional properties (alias of create_object).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        className: {
+          type: 'string',
+          description: 'Roblox class name'
+        },
+        parent: {
+          type: 'string',
+          description: 'Parent instance path'
+        },
+        name: {
+          type: 'string',
+          description: 'Optional name'
+        },
+        properties: {
+          type: 'object',
+          description: 'Properties to set on creation'
+        }
+      },
+      required: ['className', 'parent']
+    }
+  },
+  {
     name: 'mass_create_objects',
     category: 'write',
     description: 'Create multiple instances. Each can have optional properties.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        objects: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              className: {
+                type: 'string',
+                description: 'Roblox class name'
+              },
+              parent: {
+                type: 'string',
+                description: 'Parent instance path'
+              },
+              name: {
+                type: 'string',
+                description: 'Optional name'
+              },
+              properties: {
+                type: 'object',
+                description: 'Properties to set on creation'
+              }
+            },
+            required: ['className', 'parent']
+          },
+          description: 'Objects to create'
+        }
+      },
+      required: ['objects']
+    }
+  },
+  {
+    name: 'mass_create_objects_with_properties',
+    category: 'write',
+    description: 'Create multiple instances with optional properties (alias of mass_create_objects).',
     inputSchema: {
       type: 'object',
       properties: {

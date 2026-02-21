@@ -775,15 +775,17 @@ export class RobloxStudioTools {
 
 
   private static findLibraryPath(): string {
-    // Walk up from the script location to find the repo root (has .gitignore + package.json)
-    let dir = path.dirname(decodeURIComponent(new URL(import.meta.url).pathname).replace(/^\/([A-Z]:)/, '$1'));
+    // Walk up from the current working directory to find/anchor build-library.
+    let dir = process.cwd();
     for (let i = 0; i < 6; i++) {
       const candidate = path.join(dir, 'build-library');
       if (fs.existsSync(candidate)) return candidate;
-      dir = path.dirname(dir);
+      const parent = path.dirname(dir);
+      if (parent === dir) break;
+      dir = parent;
     }
-    // Fallback: create next to wherever we are
-    const fallback = path.join(dir, 'build-library');
+    // Fallback: create in the current working directory.
+    const fallback = path.join(process.cwd(), 'build-library');
     fs.mkdirSync(fallback, { recursive: true });
     return fallback;
   }
@@ -1338,7 +1340,6 @@ export class RobloxStudioTools {
       }]
     };
   }
-
   private async requestRenderObjectScreenshot(
     instancePath: string,
     options?: {
