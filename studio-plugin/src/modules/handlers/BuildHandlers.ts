@@ -47,6 +47,30 @@ function roundTo(n: number, decimals: number): number {
 	return math.round(n * mult) / mult;
 }
 
+function encodePaletteKey(index: number): string {
+	const base = PALETTE_KEYS.size();
+	let value = math.floor(index) + 1;
+	let encoded = "";
+	while (value > 0) {
+		value -= 1;
+		const digit = value % base;
+		encoded = PALETTE_KEYS.sub(digit + 1, digit + 1) + encoded;
+		value = math.floor(value / base);
+	}
+	return encoded;
+}
+
+function getVariantName(part: BasePart): string {
+	let variantName = part.MaterialVariant;
+	if (variantName === "") {
+		const [ok, variantAttr] = pcall(() => part.GetAttribute("MaterialVariant"));
+		if (ok && type(variantAttr) === "string") {
+			variantName = variantAttr as string;
+		}
+	}
+	return variantName;
+}
+
 function exportBuild(requestData: Record<string, unknown>) {
 	const instancePath = requestData.instancePath as string;
 	const outputId = requestData.outputId as string;
@@ -113,11 +137,11 @@ function exportBuild(requestData: Record<string, unknown>) {
 		for (const part of baseParts) {
 			const colorName = part.BrickColor.Name;
 			const materialName = part.Material.Name;
-			const variantName = part.MaterialVariant;
+			const variantName = getVariantName(part);
 			const combo = variantName !== "" ? `${colorName}|${materialName}|${variantName}` : `${colorName}|${materialName}`;
 
 			if (!paletteMap.has(combo)) {
-				const key = PALETTE_KEYS.sub(keyIndex + 1, keyIndex + 1);
+				const key = encodePaletteKey(keyIndex);
 				keyIndex++;
 				paletteMap.set(combo, key);
 				if (variantName !== "") {
@@ -136,7 +160,8 @@ function exportBuild(requestData: Record<string, unknown>) {
 			const sz = part.Size;
 			const colorName = part.BrickColor.Name;
 			const materialName = part.Material.Name;
-			const combo = `${colorName}|${materialName}`;
+			const variantName = getVariantName(part);
+			const combo = variantName !== "" ? `${colorName}|${materialName}|${variantName}` : `${colorName}|${materialName}`;
 			const paletteKey = paletteMap.get(combo) ?? "a";
 
 			// Relative position to center
