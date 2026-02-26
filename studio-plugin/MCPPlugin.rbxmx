@@ -765,30 +765,11 @@ local getInstanceByPath = _binding.getInstanceByPath
 local _binding_1 = Recording
 local beginRecording = _binding_1.beginRecording
 local finishRecording = _binding_1.finishRecording
--- Material name lookup table
-local MATERIAL_NAMES = {
-	Plastic = Enum.Material.Plastic,
-	Wood = Enum.Material.Wood,
-	WoodPlanks = Enum.Material.WoodPlanks,
-	Slate = Enum.Material.Slate,
-	Concrete = Enum.Material.Concrete,
-	CorrodedMetal = Enum.Material.CorrodedMetal,
-	DiamondPlate = Enum.Material.DiamondPlate,
-	Foil = Enum.Material.Foil,
-	Grass = Enum.Material.Grass,
-	Ice = Enum.Material.Ice,
-	Marble = Enum.Material.Marble,
-	Granite = Enum.Material.Granite,
-	Brick = Enum.Material.Brick,
-	Pebble = Enum.Material.Pebble,
-	Sand = Enum.Material.Sand,
-	Fabric = Enum.Material.Fabric,
-	SmoothPlastic = Enum.Material.SmoothPlastic,
-	Metal = Enum.Material.Metal,
-	Neon = Enum.Material.Neon,
-	Glass = Enum.Material.Glass,
-	Cobblestone = Enum.Material.Cobblestone,
-}
+local MATERIAL_BY_NAME = {}
+for _, enumItem in Enum.Material:GetEnumItems() do
+	local _name = enumItem.Name
+	MATERIAL_BY_NAME[_name] = enumItem
+end
 -- Shape class mapping
 local SHAPE_CLASSES = {
 	Block = "Part",
@@ -1089,8 +1070,8 @@ local function importBuild(requestData)
 					part.BrickColor = BrickColor.new(colorName)
 				end)
 				pcall(function()
-					local mat = MATERIAL_NAMES[materialName]
-					if mat then
+					local mat = MATERIAL_BY_NAME[materialName]
+					if mat ~= nil then
 						part.Material = mat
 					end
 				end)
@@ -1240,8 +1221,8 @@ local function importScene(requestData)
 						part.BrickColor = BrickColor.new(colorName)
 					end)
 					pcall(function()
-						local mat = MATERIAL_NAMES[materialName]
-						if mat then
+						local mat = MATERIAL_BY_NAME[materialName]
+						if mat ~= nil then
 							part.Material = mat
 						end
 					end)

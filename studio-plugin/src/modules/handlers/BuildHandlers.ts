@@ -6,30 +6,10 @@ const MaterialService = game.GetService("MaterialService");
 const { getInstancePath, getInstanceByPath } = Utils;
 const { beginRecording, finishRecording } = Recording;
 
-// Material name lookup table
-const MATERIAL_NAMES: Record<string, Enum.Material> = {
-	Plastic: Enum.Material.Plastic,
-	Wood: Enum.Material.Wood,
-	WoodPlanks: Enum.Material.WoodPlanks,
-	Slate: Enum.Material.Slate,
-	Concrete: Enum.Material.Concrete,
-	CorrodedMetal: Enum.Material.CorrodedMetal,
-	DiamondPlate: Enum.Material.DiamondPlate,
-	Foil: Enum.Material.Foil,
-	Grass: Enum.Material.Grass,
-	Ice: Enum.Material.Ice,
-	Marble: Enum.Material.Marble,
-	Granite: Enum.Material.Granite,
-	Brick: Enum.Material.Brick,
-	Pebble: Enum.Material.Pebble,
-	Sand: Enum.Material.Sand,
-	Fabric: Enum.Material.Fabric,
-	SmoothPlastic: Enum.Material.SmoothPlastic,
-	Metal: Enum.Material.Metal,
-	Neon: Enum.Material.Neon,
-	Glass: Enum.Material.Glass,
-	Cobblestone: Enum.Material.Cobblestone,
-};
+const MATERIAL_BY_NAME = new Map<string, Enum.Material>();
+for (const enumItem of Enum.Material.GetEnumItems()) {
+	MATERIAL_BY_NAME.set(enumItem.Name, enumItem as unknown as Enum.Material);
+}
 
 // Shape class mapping
 const SHAPE_CLASSES: Record<string, string> = {
@@ -295,8 +275,8 @@ function importBuild(requestData: Record<string, unknown>) {
 					part.BrickColor = new BrickColor(colorName as unknown as number);
 				});
 				pcall(() => {
-					const mat = MATERIAL_NAMES[materialName];
-					if (mat) {
+					const mat = MATERIAL_BY_NAME.get(materialName);
+					if (mat !== undefined) {
 						part.Material = mat;
 					}
 				});
@@ -414,8 +394,8 @@ function importScene(requestData: Record<string, unknown>) {
 						part.BrickColor = new BrickColor(colorName as unknown as number);
 					});
 					pcall(() => {
-						const mat = MATERIAL_NAMES[materialName];
-						if (mat) {
+						const mat = MATERIAL_BY_NAME.get(materialName);
+						if (mat !== undefined) {
 							part.Material = mat;
 						}
 					});
