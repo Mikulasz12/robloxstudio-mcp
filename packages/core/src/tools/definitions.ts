@@ -1171,28 +1171,50 @@ part(0,2,0,2,1,1,"b")`,
             },
             place: {
               type: 'array',
-              description: 'Array of placements: [modelKey, [x,y,z], [rotX?,rotY?,rotZ?]]',
+              description: 'Array of placements. Preferred format: {modelKey, position:[x,y,z], rotation?:[x,y,z]}. Legacy tuple format [modelKey, [x,y,z], [rotX?,rotY?,rotZ?]] is also accepted.',
               items: {
-                type: 'array',
-                minItems: 2,
-                maxItems: 3,
-                additionalItems: false,
-                items: [
+                anyOf: [
                   {
-                    type: 'string',
-                    minLength: 1
+                    type: 'object',
+                    additionalProperties: false,
+                    required: ['modelKey', 'position'],
+                    properties: {
+                      modelKey: {
+                        type: 'string',
+                        minLength: 1
+                      },
+                      position: {
+                        type: 'array',
+                        items: { type: 'number' },
+                        minItems: 3,
+                        maxItems: 3
+                      },
+                      rotation: {
+                        type: 'array',
+                        items: { type: 'number' },
+                        minItems: 3,
+                        maxItems: 3
+                      }
+                    }
                   },
                   {
                     type: 'array',
-                    items: { type: 'number' },
-                    minItems: 3,
-                    maxItems: 3
-                  },
-                  {
-                    type: 'array',
-                    items: { type: 'number' },
-                    minItems: 3,
-                    maxItems: 3
+                    minItems: 2,
+                    maxItems: 3,
+                    items: {
+                      anyOf: [
+                        {
+                          type: 'string',
+                          minLength: 1
+                        },
+                        {
+                          type: 'array',
+                          items: { type: 'number' },
+                          minItems: 3,
+                          maxItems: 3
+                        }
+                      ]
+                    }
                   }
                 ]
               }

@@ -1008,7 +1008,10 @@ export class RobloxStudioTools {
   async importScene(
     sceneData: {
       models?: Record<string, string>;
-      place?: Array<[string, number[], number[]?]>;
+      place?: Array<
+        [string, number[], number[]?]
+        | { modelKey: string; position: number[]; rotation?: number[] }
+      >;
       custom?: Array<{ n: string; o: number[]; palette: Record<string, [string, string]>; parts: any[][] }>;
     },
     targetPath: string = 'game.Workspace'
@@ -1031,25 +1034,65 @@ export class RobloxStudioTools {
     };
 
     for (const [placementIndex, placement] of placements.entries()) {
-      if (!Array.isArray(placement) || placement.length < 2 || placement.length > 3) {
-        throw new Error(`Invalid sceneData.place[${placementIndex}]: expected [modelKey, [x,y,z], [rotX?,rotY?,rotZ?]]`);
-      }
+      let modelKey: string;
+      let position: [number, number, number];
+      let rotation: [number, number, number] | undefined;
+      let validatedKeyPath: string;
 
-      const [modelKey, position, rotation] = placement;
-      if (typeof modelKey !== 'string' || modelKey.trim() === '') {
-        throw new Error(`Invalid sceneData.place[${placementIndex}][0]: model key must be a non-empty string`);
-      }
-      if (!isVec3Tuple(position)) {
-        throw new Error(`Invalid sceneData.place[${placementIndex}][1]: position must be a numeric [x,y,z] tuple`);
-      }
-      if (rotation !== undefined && !isVec3Tuple(rotation)) {
-        throw new Error(`Invalid sceneData.place[${placementIndex}][2]: rotation must be a numeric [x,y,z] tuple when provided`);
+      if (Array.isArray(placement)) {
+        if (placement.length < 2 || placement.length > 3) {
+          throw new Error(
+            `Invalid sceneData.place[${placementIndex}]: expected [modelKey, [x,y,z], [rotX?,rotY?,rotZ?]]`
+          );
+        }
+        const [tupleModelKey, tuplePosition, tupleRotation] = placement;
+        if (typeof tupleModelKey !== 'string' || tupleModelKey.trim() === '') {
+          throw new Error(`Invalid sceneData.place[${placementIndex}][0]: model key must be a non-empty string`);
+        }
+        modelKey = tupleModelKey.trim();
+        validatedKeyPath = `sceneData.place[${placementIndex}][0]`;
+        if (!isVec3Tuple(tuplePosition)) {
+          throw new Error(`Invalid sceneData.place[${placementIndex}][1]: position must be a numeric [x,y,z] tuple`);
+        }
+        position = tuplePosition;
+        if (tupleRotation !== undefined) {
+          if (!isVec3Tuple(tupleRotation)) {
+            throw new Error(
+              `Invalid sceneData.place[${placementIndex}][2]: rotation must be a numeric [x,y,z] tuple when provided`
+            );
+          }
+          rotation = tupleRotation;
+        }
+      } else if (placement && typeof placement === 'object') {
+        const placementRecord = placement as Record<string, unknown>;
+        const objectModelKey = placementRecord.modelKey;
+        const objectPosition = placementRecord.position;
+        const objectRotation = placementRecord.rotation;
+        if (typeof objectModelKey !== 'string' || objectModelKey.trim() === '') {
+          throw new Error(`Invalid sceneData.place[${placementIndex}].modelKey: model key must be a non-empty string`);
+        }
+        if (!isVec3Tuple(objectPosition)) {
+          throw new Error(`Invalid sceneData.place[${placementIndex}].position: must be a numeric [x,y,z] tuple`);
+        }
+        if (objectRotation !== undefined && !isVec3Tuple(objectRotation)) {
+          throw new Error(
+            `Invalid sceneData.place[${placementIndex}].rotation: must be a numeric [x,y,z] tuple when provided`
+          );
+        }
+        modelKey = objectModelKey.trim();
+        validatedKeyPath = `sceneData.place[${placementIndex}].modelKey`;
+        position = objectPosition;
+        rotation = objectRotation as [number, number, number] | undefined;
+      } else {
+        throw new Error(
+          `Invalid sceneData.place[${placementIndex}]: expected an object placement or [modelKey, [x,y,z], [rotX?,rotY?,rotZ?]] tuple`
+        );
       }
 
       const buildId = modelMap[modelKey];
       if (!buildId) {
         throw new Error(
-          `Invalid sceneData.place[${placementIndex}][0]: model key "${modelKey}" is not defined in sceneData.models`
+          `Invalid ${validatedKeyPath}: model key "${modelKey}" is not defined in sceneData.models`
         );
       }
 
