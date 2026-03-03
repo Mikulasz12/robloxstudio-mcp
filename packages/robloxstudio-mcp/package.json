@@ -14,7 +14,6 @@
   ],
   "scripts": {
     "build": "tsup",
-    "postinstall": "node dist/install-plugin-cli.js",
     "prepack": "node ../../scripts/prepack.mjs",
     "postpack": "node ../../scripts/postpack.mjs"
   },
