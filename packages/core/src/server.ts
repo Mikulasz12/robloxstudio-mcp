@@ -213,6 +213,22 @@ export class RobloxStudioMCPServer {
           case 'capture_screenshot':
             return await this.tools.captureScreenshot();
 
+          case 'simulate_mouse_input':
+            return await this.tools.simulateMouseInput((args as any)?.action as string, (args as any)?.x as number, (args as any)?.y as number, (args as any)?.button, (args as any)?.scrollDirection);
+          case 'simulate_keyboard_input':
+            return await this.tools.simulateKeyboardInput((args as any)?.keyCode as string, (args as any)?.action, (args as any)?.duration);
+          case 'character_navigation':
+            return await this.tools.characterNavigation((args as any)?.position, (args as any)?.instancePath, (args as any)?.waitForCompletion, (args as any)?.timeout);
+          case 'find_and_replace_in_scripts':
+            return await this.tools.findAndReplaceInScripts((args as any)?.pattern as string, (args as any)?.replacement as string, {
+              caseSensitive: (args as any)?.caseSensitive,
+              usePattern: (args as any)?.usePattern,
+              path: (args as any)?.path,
+              classFilter: (args as any)?.classFilter,
+              dryRun: (args as any)?.dryRun,
+              maxReplacements: (args as any)?.maxReplacements,
+            });
+
           default:
             throw new McpError(
               ErrorCode.MethodNotFound,

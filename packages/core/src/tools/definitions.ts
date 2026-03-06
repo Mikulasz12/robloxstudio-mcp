@@ -1322,6 +1322,141 @@ part(0,2,0,2,1,1,"b")`,
       properties: {},
     }
   },
+
+  // === Input Simulation ===
+  {
+    name: 'simulate_mouse_input',
+    category: 'write',
+    description: 'Simulate mouse input in the Roblox Studio viewport via VirtualInputManager. Use during playtest to click UI buttons, interact with objects, or navigate menus. Coordinates are viewport pixels (top-left is 0,0). Use capture_screenshot to identify UI element positions before clicking.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: {
+          type: 'string',
+          enum: ['click', 'mouseDown', 'mouseUp', 'move', 'scroll'],
+          description: 'Mouse action to perform. "click" does mouseDown + short delay + mouseUp.'
+        },
+        x: {
+          type: 'number',
+          description: 'Viewport pixel X coordinate'
+        },
+        y: {
+          type: 'number',
+          description: 'Viewport pixel Y coordinate'
+        },
+        button: {
+          type: 'string',
+          enum: ['Left', 'Right', 'Middle'],
+          description: 'Mouse button (default: Left)'
+        },
+        scrollDirection: {
+          type: 'string',
+          enum: ['up', 'down'],
+          description: 'Scroll direction (only for "scroll" action)'
+        }
+      },
+      required: ['action', 'x', 'y']
+    }
+  },
+  {
+    name: 'simulate_keyboard_input',
+    category: 'write',
+    description: 'Simulate keyboard input via VirtualInputManager. Use during playtest for character movement (W/A/S/D), jumping (Space), interactions (E), or any key-driven action. For sustained movement, use "press" to hold and "release" to let go.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        keyCode: {
+          type: 'string',
+          description: 'Enum.KeyCode name: "W", "A", "S", "D", "Space", "E", "F", "LeftShift", "LeftControl", "Return", "Tab", "Escape", "One", "Two", etc.'
+        },
+        action: {
+          type: 'string',
+          enum: ['press', 'release', 'tap'],
+          description: '"tap" (default) = press + wait + release. "press" = key down only. "release" = key up only.'
+        },
+        duration: {
+          type: 'number',
+          description: 'Hold duration in seconds for "tap" action (default: 0.1). Use longer values for sustained input like walking.'
+        }
+      },
+      required: ['keyCode']
+    }
+  },
+
+  // === Character Navigation ===
+  {
+    name: 'character_navigation',
+    category: 'write',
+    description: 'Move the player character to a target position or instance during playtest. Uses PathfindingService for automatic navigation around obstacles, falling back to direct movement. Requires an active playtest in "play" mode. Does NOT simulate player input — moves the character directly.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        position: {
+          type: 'array',
+          items: { type: 'number' },
+          description: 'Target world position [x, y, z]. Either this or instancePath is required.'
+        },
+        instancePath: {
+          type: 'string',
+          description: 'Instance to navigate to (dot notation). The character walks to its Position. Either this or position is required.'
+        },
+        waitForCompletion: {
+          type: 'boolean',
+          description: 'Wait for the character to arrive before returning (default: true)'
+        },
+        timeout: {
+          type: 'number',
+          description: 'Max seconds to wait for navigation to complete (default: 25)'
+        }
+      }
+    }
+  },
+
+  // === Find and Replace ===
+  {
+    name: 'find_and_replace_in_scripts',
+    category: 'write',
+    description: 'Find and replace text across all scripts in the game. Supports literal and Lua pattern matching. Use dryRun to preview changes before applying. Pairs with grep_scripts for search-only operations.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        pattern: {
+          type: 'string',
+          description: 'Text or Lua pattern to find'
+        },
+        replacement: {
+          type: 'string',
+          description: 'Replacement text. When usePattern is true, supports Lua captures (%1, %2, etc.).'
+        },
+        caseSensitive: {
+          type: 'boolean',
+          description: 'Case-sensitive matching (default: false). Must be true when usePattern is true.'
+        },
+        usePattern: {
+          type: 'boolean',
+          description: 'Use Lua pattern matching instead of literal (default: false). Requires caseSensitive: true.'
+        },
+        path: {
+          type: 'string',
+          description: 'Limit scope to a subtree (e.g. "game.ServerScriptService")'
+        },
+        classFilter: {
+          type: 'string',
+          enum: ['Script', 'LocalScript', 'ModuleScript'],
+          description: 'Only search scripts of this class type'
+        },
+        dryRun: {
+          type: 'boolean',
+          description: 'Preview changes without applying them (default: false)'
+        },
+        maxReplacements: {
+          type: 'number',
+          description: 'Safety limit on total replacements (default: 1000)'
+        }
+      },
+      required: ['pattern', 'replacement']
+    }
+  },
 ];
 
 export const getReadOnlyTools = () => TOOL_DEFINITIONS.filter(t => t.category === 'read');

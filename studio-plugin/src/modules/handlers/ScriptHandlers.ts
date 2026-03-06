@@ -344,10 +344,152 @@ function deleteScriptLines(requestData: Record<string, unknown>) {
 	return { error: `Failed to delete script lines: ${result}` };
 }
 
+function escapeLuaPattern(s: string): string {
+	return s.gsub("([%(%)%.%%%+%-%*%?%[%]%^%$])", "%%%1")[0];
+}
+
+function escapeLuaReplacement(s: string): string {
+	return s.gsub("%%", "%%%%")[0];
+}
+
+function caseInsensitiveLiteralReplace(src: string, searchStr: string, repl: string): [string, number] {
+	const lowerSrc = src.lower();
+	const lowerSearch = searchStr.lower();
+	const parts: string[] = [];
+	let lastEnd = 1;
+	const searchLen = lowerSearch.size();
+	let pos = 1;
+	let replCount = 0;
+
+	while (true) {
+		const [foundStart] = string.find(lowerSrc, lowerSearch, pos, true);
+		if (foundStart === undefined) break;
+		parts.push(string.sub(src, lastEnd, foundStart - 1));
+		parts.push(repl);
+		lastEnd = foundStart + searchLen;
+		pos = foundStart + searchLen;
+		replCount++;
+	}
+	parts.push(string.sub(src, lastEnd));
+	return [parts.join(""), replCount];
+}
+
+function findAndReplaceInScripts(requestData: Record<string, unknown>) {
+	const searchPattern = requestData.pattern as string;
+	const replacement = requestData.replacement as string;
+
+	if (!searchPattern) return { error: "pattern is required" };
+	if (replacement === undefined) return { error: "replacement is required" };
+
+	const caseSensitive = (requestData.caseSensitive as boolean) ?? false;
+	const usePattern = (requestData.usePattern as boolean) ?? false;
+	const searchPath = (requestData.path as string) ?? "";
+	const classFilter = requestData.classFilter as string | undefined;
+	const dryRun = (requestData.dryRun as boolean) ?? false;
+	const maxReplacements = (requestData.maxReplacements as number) ?? 1000;
+
+	if (!caseSensitive && usePattern) {
+		return { error: "Case-insensitive Lua pattern replacement is not supported. Use caseSensitive: true with usePattern: true, or use literal matching." };
+	}
+
+	const startInstance = searchPath !== "" ? getInstanceByPath(searchPath) : game;
+	if (!startInstance) return { error: `Path not found: ${searchPath}` };
+
+	interface ScriptChange {
+		instancePath: string;
+		name: string;
+		className: string;
+		replacements: number;
+	}
+
+	const changes: ScriptChange[] = [];
+	let totalReplacements = 0;
+	let scriptsSearched = 0;
+	let hitLimit = false;
+
+	const recordingId = dryRun ? undefined : beginRecording("Find and replace in scripts");
+
+	function processInstance(instance: Instance) {
+		if (hitLimit) return;
+
+		if (instance.IsA("LuaSourceContainer")) {
+			if (classFilter && !instance.ClassName.lower().find(classFilter.lower())[0]) return;
+
+			scriptsSearched++;
+			const source = readScriptSource(instance);
+
+			let newSource: string;
+			let replCount: number;
+
+			if (usePattern) {
+				const [result, count] = string.gsub(source, searchPattern, replacement);
+				newSource = result;
+				replCount = count;
+			} else if (caseSensitive) {
+				const escaped = escapeLuaPattern(searchPattern);
+				const escapedRepl = escapeLuaReplacement(replacement);
+				const [result, count] = string.gsub(source, escaped, escapedRepl);
+				newSource = result;
+				replCount = count;
+			} else {
+				[newSource, replCount] = caseInsensitiveLiteralReplace(source, searchPattern, replacement);
+			}
+
+			if (replCount > 0) {
+				if (totalReplacements + replCount > maxReplacements) {
+					hitLimit = true;
+					return;
+				}
+				totalReplacements += replCount;
+
+				if (!dryRun) {
+					const [ok] = pcall(() => {
+						ScriptEditorService.UpdateSourceAsync(instance, () => newSource);
+					});
+					if (!ok) {
+						(instance as unknown as { Source: string }).Source = newSource;
+					}
+				}
+
+				changes.push({
+					instancePath: getInstancePath(instance),
+					name: instance.Name,
+					className: instance.ClassName,
+					replacements: replCount,
+				});
+			}
+		}
+
+		for (const child of instance.GetChildren()) {
+			if (hitLimit) return;
+			processInstance(child);
+		}
+	}
+
+	processInstance(startInstance);
+
+	if (recordingId !== undefined) {
+		finishRecording(recordingId, changes.size() > 0);
+	}
+
+	return {
+		success: true,
+		dryRun,
+		pattern: searchPattern,
+		replacement,
+		totalReplacements,
+		scriptsSearched,
+		scriptsModified: changes.size(),
+		changes,
+		truncated: hitLimit,
+	};
+}
+
 export = {
 	getScriptSource,
 	setScriptSource,
 	editScriptLines,
 	insertScriptLines,
 	deleteScriptLines,
+	findAndReplaceInScripts,
 };

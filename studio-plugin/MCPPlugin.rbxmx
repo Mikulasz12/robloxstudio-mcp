@@ -55,6 +55,7 @@ local TestHandlers = TS.import(script, script.Parent, "handlers", "TestHandlers"
 local BuildHandlers = TS.import(script, script.Parent, "handlers", "BuildHandlers")
 local AssetHandlers = TS.import(script, script.Parent, "handlers", "AssetHandlers")
 local CaptureHandlers = TS.import(script, script.Parent, "handlers", "CaptureHandlers")
+local InputHandlers = TS.import(script, script.Parent, "handlers", "InputHandlers")
 local routeMap = {
 	["/api/file-tree"] = QueryHandlers.getFileTree,
 	["/api/search-files"] = QueryHandlers.searchFiles,
@@ -98,6 +99,7 @@ local routeMap = {
 	["/api/start-playtest"] = TestHandlers.startPlaytest,
 	["/api/stop-playtest"] = TestHandlers.stopPlaytest,
 	["/api/get-playtest-output"] = TestHandlers.getPlaytestOutput,
+	["/api/character-navigation"] = TestHandlers.characterNavigation,
 	["/api/export-build"] = BuildHandlers.exportBuild,
 	["/api/import-build"] = BuildHandlers.importBuild,
 	["/api/import-scene"] = BuildHandlers.importScene,
@@ -105,6 +107,9 @@ local routeMap = {
 	["/api/insert-asset"] = AssetHandlers.insertAsset,
 	["/api/preview-asset"] = AssetHandlers.previewAsset,
 	["/api/capture-screenshot"] = CaptureHandlers.captureScreenshot,
+	["/api/simulate-mouse-input"] = InputHandlers.simulateMouseInput,
+	["/api/simulate-keyboard-input"] = InputHandlers.simulateKeyboardInput,
+	["/api/find-and-replace-in-scripts"] = ScriptHandlers.findAndReplaceInScripts,
 }
 local function processRequest(request)
 	local endpoint = request.endpoint
@@ -1500,6 +1505,160 @@ return {
         </Item>
         <Item class="ModuleScript" referent="7">
           <Properties>
+            <string name="Name">InputHandlers</string>
+            <string name="Source"><![CDATA[-- Compiled with roblox-ts v3.0.0
+local function getVIM()
+	local ok, result = pcall(function()
+		return game:GetService("VirtualInputManager")
+	end)
+	if ok and result then
+		return result
+	end
+	return nil
+end
+local BUTTON_MAP = {
+	Left = 0,
+	Right = 1,
+	Middle = 2,
+}
+local function simulateMouseInput(requestData)
+	local action = requestData.action
+	local x = requestData.x
+	local y = requestData.y
+	local _condition = (requestData.button)
+	if _condition == nil then
+		_condition = "Left"
+	end
+	local button = _condition
+	local scrollDirection = requestData.scrollDirection
+	if not (action ~= "" and action) then
+		return {
+			error = "action is required",
+		}
+	end
+	local vim = getVIM()
+	if not vim then
+		return {
+			error = "VirtualInputManager is not available in this context",
+		}
+	end
+	local _condition_1 = BUTTON_MAP[button]
+	if _condition_1 == nil then
+		_condition_1 = 0
+	end
+	local buttonNum = _condition_1
+	local success, err = pcall(function()
+		if action == "click" then
+			if x == nil or y == nil then
+				error("x and y are required for click")
+			end
+			vim:SendMouseButtonEvent(x, y, buttonNum, true)
+			task.wait(0.05)
+			vim:SendMouseButtonEvent(x, y, buttonNum, false)
+		elseif action == "mouseDown" then
+			if x == nil or y == nil then
+				error("x and y are required for mouseDown")
+			end
+			vim:SendMouseButtonEvent(x, y, buttonNum, true)
+		elseif action == "mouseUp" then
+			if x == nil or y == nil then
+				error("x and y are required for mouseUp")
+			end
+			vim:SendMouseButtonEvent(x, y, buttonNum, false)
+		elseif action == "move" then
+			if x == nil or y == nil then
+				error("x and y are required for move")
+			end
+			vim:SendMouseMoveEvent(x, y)
+		elseif action == "scroll" then
+			if x == nil or y == nil then
+				error("x and y are required for scroll")
+			end
+			if not (scrollDirection ~= "" and scrollDirection) then
+				error("scrollDirection is required for scroll")
+			end
+			vim:SendMouseWheelEvent(x, y, scrollDirection == "up")
+		else
+			error(`Unknown action: {action}`)
+		end
+	end)
+	if success then
+		return {
+			success = true,
+			action = action,
+			x = x,
+			y = y,
+			button = button,
+		}
+	end
+	return {
+		error = `Failed to simulate mouse input: {err}`,
+	}
+end
+local function simulateKeyboardInput(requestData)
+	local keyCodeName = requestData.keyCode
+	local _condition = (requestData.action)
+	if _condition == nil then
+		_condition = "tap"
+	end
+	local action = _condition
+	local _condition_1 = (requestData.duration)
+	if _condition_1 == nil then
+		_condition_1 = 0.1
+	end
+	local duration = _condition_1
+	if not (keyCodeName ~= "" and keyCodeName) then
+		return {
+			error = "keyCode is required",
+		}
+	end
+	local vim = getVIM()
+	if not vim then
+		return {
+			error = "VirtualInputManager is not available in this context",
+		}
+	end
+	local enumOk, keyCode = pcall(function()
+		return (Enum.KeyCode)[keyCodeName]
+	end)
+	if not enumOk or not keyCode then
+		return {
+			error = `Unknown keyCode: {keyCodeName}. Use Enum.KeyCode names like "W", "Space", "E", "LeftShift", etc.`,
+		}
+	end
+	local success, err = pcall(function()
+		if action == "press" then
+			vim:SendKeyEvent(true, keyCode, false)
+		elseif action == "release" then
+			vim:SendKeyEvent(false, keyCode, false)
+		elseif action == "tap" then
+			vim:SendKeyEvent(true, keyCode, false)
+			task.wait(duration)
+			vim:SendKeyEvent(false, keyCode, false)
+		else
+			error(`Unknown action: {action}`)
+		end
+	end)
+	if success then
+		return {
+			success = true,
+			keyCode = keyCodeName,
+			action = action,
+		}
+	end
+	return {
+		error = `Failed to simulate keyboard input: {err}`,
+	}
+end
+return {
+	simulateMouseInput = simulateMouseInput,
+	simulateKeyboardInput = simulateKeyboardInput,
+}
+]]></string>
+          </Properties>
+        </Item>
+        <Item class="ModuleScript" referent="8">
+          <Properties>
             <string name="Name">InstanceHandlers</string>
             <string name="Source"><![CDATA[-- Compiled with roblox-ts v3.0.0
 local TS = require(script.Parent.Parent.Parent.include.RuntimeLib)
@@ -2020,7 +2179,7 @@ return {
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="8">
+        <Item class="ModuleScript" referent="9">
           <Properties>
             <string name="Name">MetadataHandlers</string>
             <string name="Source"><![CDATA[-- Compiled with roblox-ts v3.0.0
@@ -2582,7 +2741,7 @@ return {
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="9">
+        <Item class="ModuleScript" referent="10">
           <Properties>
             <string name="Name">PropertyHandlers</string>
             <string name="Source"><![CDATA[-- Compiled with roblox-ts v3.0.0
@@ -2985,7 +3144,7 @@ return {
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="10">
+        <Item class="ModuleScript" referent="11">
           <Properties>
             <string name="Name">QueryHandlers</string>
             <string name="Source"><![CDATA[-- Compiled with roblox-ts v3.0.0
@@ -3843,7 +4002,7 @@ return {
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="11">
+        <Item class="ModuleScript" referent="12">
           <Properties>
             <string name="Name">ScriptHandlers</string>
             <string name="Source"><![CDATA[-- Compiled with roblox-ts v3.0.0
@@ -4356,46 +4515,279 @@ local function deleteScriptLines(requestData)
 		error = `Failed to delete script lines: {result}`,
 	}
 end
+local function escapeLuaPattern(s)
+	return (string.gsub(s, "([%(%)%.%%%+%-%*%?%[%]%^%$])", "%%%1"))
+end
+local function escapeLuaReplacement(s)
+	return (string.gsub(s, "%%", "%%%%"))
+end
+local function caseInsensitiveLiteralReplace(src, searchStr, repl)
+	local lowerSrc = string.lower(src)
+	local lowerSearch = string.lower(searchStr)
+	local parts = {}
+	local lastEnd = 1
+	local searchLen = #lowerSearch
+	local pos = 1
+	local replCount = 0
+	while true do
+		local foundStart = string.find(lowerSrc, lowerSearch, pos, true)
+		if foundStart == nil then
+			break
+		end
+		local _arg0 = string.sub(src, lastEnd, foundStart - 1)
+		table.insert(parts, _arg0)
+		local _repl = repl
+		table.insert(parts, _repl)
+		lastEnd = foundStart + searchLen
+		pos = foundStart + searchLen
+		replCount += 1
+	end
+	local _arg0 = string.sub(src, lastEnd)
+	table.insert(parts, _arg0)
+	return { table.concat(parts, ""), replCount }
+end
+local function findAndReplaceInScripts(requestData)
+	local searchPattern = requestData.pattern
+	local replacement = requestData.replacement
+	if not (searchPattern ~= "" and searchPattern) then
+		return {
+			error = "pattern is required",
+		}
+	end
+	if replacement == nil then
+		return {
+			error = "replacement is required",
+		}
+	end
+	local _condition = (requestData.caseSensitive)
+	if _condition == nil then
+		_condition = false
+	end
+	local caseSensitive = _condition
+	local _condition_1 = (requestData.usePattern)
+	if _condition_1 == nil then
+		_condition_1 = false
+	end
+	local usePattern = _condition_1
+	local _condition_2 = (requestData.path)
+	if _condition_2 == nil then
+		_condition_2 = ""
+	end
+	local searchPath = _condition_2
+	local classFilter = requestData.classFilter
+	local _condition_3 = (requestData.dryRun)
+	if _condition_3 == nil then
+		_condition_3 = false
+	end
+	local dryRun = _condition_3
+	local _condition_4 = (requestData.maxReplacements)
+	if _condition_4 == nil then
+		_condition_4 = 1000
+	end
+	local maxReplacements = _condition_4
+	if not caseSensitive and usePattern then
+		return {
+			error = "Case-insensitive Lua pattern replacement is not supported. Use caseSensitive: true with usePattern: true, or use literal matching.",
+		}
+	end
+	local startInstance = if searchPath ~= "" then getInstanceByPath(searchPath) else game
+	if not startInstance then
+		return {
+			error = `Path not found: {searchPath}`,
+		}
+	end
+	local changes = {}
+	local totalReplacements = 0
+	local scriptsSearched = 0
+	local hitLimit = false
+	local recordingId = if dryRun then nil else beginRecording("Find and replace in scripts")
+	local function processInstance(instance)
+		if hitLimit then
+			return nil
+		end
+		if instance:IsA("LuaSourceContainer") then
+			local _condition_5 = classFilter
+			if _condition_5 ~= "" and _condition_5 then
+				local _exp = string.lower(instance.ClassName)
+				local _arg0 = string.lower(classFilter)
+				local _value = (string.find(_exp, _arg0))
+				_condition_5 = not (_value ~= 0 and _value == _value and _value)
+			end
+			if _condition_5 ~= "" and _condition_5 then
+				return nil
+			end
+			scriptsSearched += 1
+			local source = readScriptSource(instance)
+			local newSource
+			local replCount
+			if usePattern then
+				local result, count = string.gsub(source, searchPattern, replacement)
+				newSource = result
+				replCount = count
+			elseif caseSensitive then
+				local escaped = escapeLuaPattern(searchPattern)
+				local escapedRepl = escapeLuaReplacement(replacement)
+				local result, count = string.gsub(source, escaped, escapedRepl)
+				newSource = result
+				replCount = count
+			else
+				local _binding_2 = caseInsensitiveLiteralReplace(source, searchPattern, replacement)
+				newSource = _binding_2[1]
+				replCount = _binding_2[2]
+			end
+			if replCount > 0 then
+				if totalReplacements + replCount > maxReplacements then
+					hitLimit = true
+					return nil
+				end
+				totalReplacements += replCount
+				if not dryRun then
+					local ok = pcall(function()
+						ScriptEditorService:UpdateSourceAsync(instance, function()
+							return newSource
+						end)
+					end)
+					if not ok then
+						instance.Source = newSource
+					end
+				end
+				local _arg0 = {
+					instancePath = getInstancePath(instance),
+					name = instance.Name,
+					className = instance.ClassName,
+					replacements = replCount,
+				}
+				table.insert(changes, _arg0)
+			end
+		end
+		for _, child in instance:GetChildren() do
+			if hitLimit then
+				return nil
+			end
+			processInstance(child)
+		end
+	end
+	processInstance(startInstance)
+	if recordingId ~= nil then
+		finishRecording(recordingId, #changes > 0)
+	end
+	return {
+		success = true,
+		dryRun = dryRun,
+		pattern = searchPattern,
+		replacement = replacement,
+		totalReplacements = totalReplacements,
+		scriptsSearched = scriptsSearched,
+		scriptsModified = #changes,
+		changes = changes,
+		truncated = hitLimit,
+	}
+end
 return {
 	getScriptSource = getScriptSource,
 	setScriptSource = setScriptSource,
 	editScriptLines = editScriptLines,
 	insertScriptLines = insertScriptLines,
 	deleteScriptLines = deleteScriptLines,
+	findAndReplaceInScripts = findAndReplaceInScripts,
 }
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="12">
+        <Item class="ModuleScript" referent="13">
           <Properties>
             <string name="Name">TestHandlers</string>
             <string name="Source"><![CDATA[-- Compiled with roblox-ts v3.0.0
 local TS = require(script.Parent.Parent.Parent.include.RuntimeLib)
-local LogService = TS.import(script, script.Parent.Parent.Parent, "node_modules", "@rbxts", "services").LogService
+local _services = TS.import(script, script.Parent.Parent.Parent, "node_modules", "@rbxts", "services")
+local HttpService = _services.HttpService
+local LogService = _services.LogService
 local StudioTestService = game:GetService("StudioTestService")
 local ServerScriptService = game:GetService("ServerScriptService")
 local ScriptEditorService = game:GetService("ScriptEditorService")
 local STOP_SIGNAL = "__MCP_STOP__"
+local NAV_SIGNAL = "__MCP_NAV__"
+local NAV_RESULT = "__MCP_NAV_RESULT__"
 local testRunning = false
 local outputBuffer = {}
 local logConnection
 local testResult
 local testError
 local stopListenerScript
-local function buildStopListenerSource()
+local navResultCallback
+local function buildCommandListenerSource()
 	return `local LogService = game:GetService("LogService")\
 local StudioTestService = game:GetService("StudioTestService")\
-LogService.MessageOut:Connect(function(message)\
-	if message == "{STOP_SIGNAL}" then\
+local PathfindingService = game:GetService("PathfindingService")\
+local Players = game:GetService("Players")\
+local HttpService = game:GetService("HttpService")\
+local NAV_SIG = "{NAV_SIGNAL}"\
+local NAV_RES = "{NAV_RESULT}"\
+LogService.MessageOut:Connect(function(msg)\
+	if msg == "{STOP_SIGNAL}" then\
 		pcall(function() StudioTestService:EndTest("stopped_by_mcp") end)\
+	elseif string.sub(msg, 1, #NAV_SIG + 1) == NAV_SIG .. ":" then\
+		local json = string.sub(msg, #NAV_SIG + 2)\
+		task.spawn(function()\
+			local ok, d = pcall(function() return HttpService:JSONDecode(json) end)\
+			if not ok or not d then\
+				print(NAV_RES .. ':\{"success":false,"error":"parse_error"\}')\
+				return\
+			end\
+			local ps = Players:GetPlayers()\
+			if #ps == 0 then\
+				print(NAV_RES .. ':\{"success":false,"error":"no_players"\}')\
+				return\
+			end\
+			local char = ps[1].Character or ps[1].CharacterAdded:Wait()\
+			local hum = char:FindFirstChildOfClass("Humanoid")\
+			local root = char:FindFirstChild("HumanoidRootPart")\
+			if not hum or not root then\
+				print(NAV_RES .. ':\{"success":false,"error":"no_humanoid"\}')\
+				return\
+			end\
+			local target\
+			if d.instancePath then\
+				local parts = string.split(d.instancePath, ".")\
+				local cur = game\
+				for i = 2, #parts do\
+					cur = cur:FindFirstChild(parts[i])\
+					if not cur then\
+						print(NAV_RES .. ':\{"success":false,"error":"instance_not_found"\}')\
+						return\
+					end\
+				end\
+				if cur:IsA("BasePart") then target = cur.Position\
+				elseif cur:IsA("Model") and cur.PrimaryPart then target = cur.PrimaryPart.Position\
+				else target = cur:GetPivot().Position end\
+			else\
+				target = Vector3.new(d.x or 0, d.y or 0, d.z or 0)\
+			end\
+			local path = PathfindingService:CreatePath(\{AgentRadius=2,AgentHeight=5,AgentCanJump=true\})\
+			local pok = pcall(function() path:ComputeAsync(root.Position, target) end)\
+			local method = "direct"\
+			if pok and path.Status == Enum.PathStatus.Success then\
+				method = "pathfinding"\
+				for _, wp in ipairs(path:GetWaypoints()) do\
+					hum:MoveTo(wp.Position)\
+					if wp.Action == Enum.PathWaypointAction.Jump then hum.Jump = true end\
+					hum.MoveToFinished:Wait()\
+				end\
+			else\
+				hum:MoveTo(target)\
+				hum.MoveToFinished:Wait()\
+			end\
+			local fp = root.Position\
+			print(NAV_RES .. ':\{"success":true,"method":"' .. method .. '","position":[' .. fp.X .. ',' .. fp.Y .. ',' .. fp.Z .. ']\}')\
+		end)\
 	end\
 end)`
 end
 local function injectStopListener()
 	local listener = Instance.new("Script")
-	listener.Name = "__MCP_StopListener"
+	listener.Name = "__MCP_CommandListener"
 	listener.Parent = ServerScriptService
-	local source = buildStopListenerSource()
+	local source = buildCommandListenerSource()
 	local seOk = pcall(function()
 		ScriptEditorService:UpdateSourceAsync(listener, function()
 			return source
@@ -4433,6 +4825,22 @@ local function startPlaytest(requestData)
 	cleanupStopListener()
 	logConnection = LogService.MessageOut:Connect(function(message, messageType)
 		if message == STOP_SIGNAL then
+			return nil
+		end
+		local _message = message
+		local _arg1 = #NAV_SIGNAL
+		if string.sub(_message, 1, _arg1) == NAV_SIGNAL then
+			return nil
+		end
+		local _message_1 = message
+		local _arg1_1 = #NAV_RESULT + 1
+		if string.sub(_message_1, 1, _arg1_1) == `{NAV_RESULT}:` then
+			if navResultCallback then
+				local _fn = navResultCallback
+				local _message_2 = message
+				local _arg0 = #NAV_RESULT + 2
+				_fn(string.sub(_message_2, _arg0))
+			end
 			return nil
 		end
 		local _outputBuffer = outputBuffer
@@ -4506,16 +4914,84 @@ local function getPlaytestOutput(_requestData)
 	_object.testError = testError
 	return _object
 end
+local function characterNavigation(requestData)
+	if not testRunning then
+		return {
+			error = "Playtest must be running. Start a playtest in 'play' mode first.",
+		}
+	end
+	local position = requestData.position
+	local instancePath = requestData.instancePath
+	local _condition = (requestData.waitForCompletion)
+	if _condition == nil then
+		_condition = true
+	end
+	local waitForCompletion = _condition
+	local _condition_1 = (requestData.timeout)
+	if _condition_1 == nil then
+		_condition_1 = 25
+	end
+	local timeout = _condition_1
+	if not position and not (instancePath ~= "" and instancePath) then
+		return {
+			error = "Either position [x, y, z] or instancePath is required",
+		}
+	end
+	local navData
+	if position then
+		navData = HttpService:JSONEncode({
+			x = position[1],
+			y = position[2],
+			z = position[3],
+		})
+	else
+		navData = HttpService:JSONEncode({
+			instancePath = instancePath,
+		})
+	end
+	warn(`{NAV_SIGNAL}:{navData}`)
+	if not waitForCompletion then
+		return {
+			success = true,
+			message = "Navigation command sent",
+		}
+	end
+	local result
+	navResultCallback = function(json)
+		result = json
+	end
+	local startTime = tick()
+	while not (result ~= "" and result) and tick() - startTime < timeout do
+		task.wait(0.2)
+	end
+	navResultCallback = nil
+	if result ~= "" and result then
+		local ok, parsed = pcall(function()
+			return HttpService:JSONDecode(result)
+		end)
+		if ok then
+			return parsed
+		end
+		return {
+			success = true,
+			rawResult = result,
+		}
+	end
+	return {
+		error = `Navigation timed out after {timeout} seconds`,
+	}
+end
 return {
 	startPlaytest = startPlaytest,
 	stopPlaytest = stopPlaytest,
 	getPlaytestOutput = getPlaytestOutput,
+	characterNavigation = characterNavigation,
 }
 ]]></string>
           </Properties>
         </Item>
       </Item>
-      <Item class="ModuleScript" referent="13">
+      <Item class="ModuleScript" referent="14">
         <Properties>
           <string name="Name">Recording</string>
           <string name="Source"><![CDATA[-- Compiled with roblox-ts v3.0.0
@@ -4545,7 +5021,7 @@ return {
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="14">
+      <Item class="ModuleScript" referent="15">
         <Properties>
           <string name="Name">State</string>
           <string name="Source"><![CDATA[-- Compiled with roblox-ts v3.0.0
@@ -4636,7 +5112,7 @@ return {
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="15">
+      <Item class="ModuleScript" referent="16">
         <Properties>
           <string name="Name">UI</string>
           <string name="Source"><![CDATA[-- Compiled with roblox-ts v3.0.0
@@ -5264,7 +5740,7 @@ return {
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="16">
+      <Item class="ModuleScript" referent="17">
         <Properties>
           <string name="Name">Utils</string>
           <string name="Source"><![CDATA[-- Compiled with roblox-ts v3.0.0
@@ -5794,11 +6270,11 @@ return {
         </Properties>
       </Item>
     </Item>
-    <Item class="Folder" referent="20">
+    <Item class="Folder" referent="21">
       <Properties>
         <string name="Name">include</string>
       </Properties>
-      <Item class="ModuleScript" referent="17">
+      <Item class="ModuleScript" referent="18">
         <Properties>
           <string name="Name">Promise</string>
           <string name="Source"><![CDATA[--[[
@@ -7872,7 +8348,7 @@ return Promise
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="18">
+      <Item class="ModuleScript" referent="19">
         <Properties>
           <string name="Name">RuntimeLib</string>
           <string name="Source"><![CDATA[local Promise = require(script.Parent.Promise)
@@ -8139,15 +8615,15 @@ return TS
         </Properties>
       </Item>
     </Item>
-    <Item class="Folder" referent="21">
+    <Item class="Folder" referent="22">
       <Properties>
         <string name="Name">node_modules</string>
       </Properties>
-      <Item class="Folder" referent="22">
+      <Item class="Folder" referent="23">
         <Properties>
           <string name="Name">@rbxts</string>
         </Properties>
-      <Item class="ModuleScript" referent="19">
+      <Item class="ModuleScript" referent="20">
         <Properties>
           <string name="Name">services</string>
           <string name="Source"><![CDATA[return setmetatable({}, {

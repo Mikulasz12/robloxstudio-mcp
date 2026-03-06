@@ -1271,6 +1271,82 @@ export class RobloxStudioTools {
     };
   }
 
+  async simulateMouseInput(action: string, x: number, y: number, button?: string, scrollDirection?: string) {
+    if (!action) {
+      throw new Error('action is required for simulate_mouse_input');
+    }
+    const response = await this.client.request('/api/simulate-mouse-input', {
+      action, x, y, button, scrollDirection
+    });
+    return {
+      content: [{
+        type: 'text',
+        text: JSON.stringify(response)
+      }]
+    };
+  }
+
+  async simulateKeyboardInput(keyCode: string, action?: string, duration?: number) {
+    if (!keyCode) {
+      throw new Error('keyCode is required for simulate_keyboard_input');
+    }
+    const response = await this.client.request('/api/simulate-keyboard-input', {
+      keyCode, action, duration
+    });
+    return {
+      content: [{
+        type: 'text',
+        text: JSON.stringify(response)
+      }]
+    };
+  }
+
+  async characterNavigation(position?: number[], instancePath?: string, waitForCompletion?: boolean, timeout?: number) {
+    if (!position && !instancePath) {
+      throw new Error('Either position or instancePath is required for character_navigation');
+    }
+    const response = await this.client.request('/api/character-navigation', {
+      position, instancePath, waitForCompletion, timeout
+    });
+    return {
+      content: [{
+        type: 'text',
+        text: JSON.stringify(response)
+      }]
+    };
+  }
+
+  async findAndReplaceInScripts(
+    pattern: string,
+    replacement: string,
+    options?: {
+      caseSensitive?: boolean;
+      usePattern?: boolean;
+      path?: string;
+      classFilter?: string;
+      dryRun?: boolean;
+      maxReplacements?: number;
+    }
+  ) {
+    if (!pattern) {
+      throw new Error('pattern is required for find_and_replace_in_scripts');
+    }
+    if (replacement === undefined || replacement === null) {
+      throw new Error('replacement is required for find_and_replace_in_scripts');
+    }
+    const response = await this.client.request('/api/find-and-replace-in-scripts', {
+      pattern,
+      replacement,
+      ...options
+    });
+    return {
+      content: [{
+        type: 'text',
+        text: JSON.stringify(response)
+      }]
+    };
+  }
+
   async captureScreenshot() {
     const response = await this.client.request('/api/capture-screenshot', {}) as {
       success?: boolean;
