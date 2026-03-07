@@ -66,7 +66,7 @@ function readPixelsTiled(img: EditableImage, w: number, h: number): buffer {
 	return fullBuf;
 }
 
-function captureScreenshot(): unknown {
+function captureScreenshotData(): unknown {
 	let contentId: string | undefined;
 
 	CaptureService.CaptureScreenshot((id: string) => {
@@ -113,6 +113,11 @@ function captureScreenshot(): unknown {
 	return { success: true, width: w, height: h, data: base64Data };
 }
 
+function captureScreenshot(): unknown {
+	return captureScreenshotData();
+}
+
 export = {
+	captureScreenshotData,
 	captureScreenshot,
 };

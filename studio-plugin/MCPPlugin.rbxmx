@@ -56,6 +56,7 @@ local BuildHandlers = TS.import(script, script.Parent, "handlers", "BuildHandler
 local AssetHandlers = TS.import(script, script.Parent, "handlers", "AssetHandlers")
 local CaptureHandlers = TS.import(script, script.Parent, "handlers", "CaptureHandlers")
 local InputHandlers = TS.import(script, script.Parent, "handlers", "InputHandlers")
+local RenderHandlers = TS.import(script, script.Parent, "handlers", "RenderHandlers")
 local routeMap = {
 	["/api/file-tree"] = QueryHandlers.getFileTree,
 	["/api/search-files"] = QueryHandlers.searchFiles,
@@ -107,6 +108,7 @@ local routeMap = {
 	["/api/insert-asset"] = AssetHandlers.insertAsset,
 	["/api/preview-asset"] = AssetHandlers.previewAsset,
 	["/api/capture-screenshot"] = CaptureHandlers.captureScreenshot,
+	["/api/render-model-screenshot"] = RenderHandlers.renderModelScreenshot,
 	["/api/simulate-mouse-input"] = InputHandlers.simulateMouseInput,
 	["/api/simulate-keyboard-input"] = InputHandlers.simulateKeyboardInput,
 	["/api/find-and-replace-in-scripts"] = ScriptHandlers.findAndReplaceInScripts,
@@ -1454,7 +1456,7 @@ local function readPixelsTiled(img, w, h)
 	end
 	return fullBuf
 end
-local function captureScreenshot()
+local function captureScreenshotData()
 	local contentId
 	CaptureService:CaptureScreenshot(function(id)
 		contentId = id
@@ -1497,7 +1499,11 @@ local function captureScreenshot()
 		data = base64Data,
 	}
 end
+local function captureScreenshot()
+	return captureScreenshotData()
+end
 return {
+	captureScreenshotData = captureScreenshotData,
 	captureScreenshot = captureScreenshot,
 }
 ]]></string>
@@ -4004,6 +4010,235 @@ return {
         </Item>
         <Item class="ModuleScript" referent="12">
           <Properties>
+            <string name="Name">RenderHandlers</string>
+            <string name="Source"><![CDATA[-- Compiled with roblox-ts v3.0.0
+local TS = require(script.Parent.Parent.Parent.include.RuntimeLib)
+local Utils = TS.import(script, script.Parent.Parent, "Utils")
+local CaptureHandlers = TS.import(script, script.Parent, "CaptureHandlers")
+local _binding = Utils
+local getInstanceByPath = _binding.getInstanceByPath
+local Selection = game:GetService("Selection")
+local Workspace = game:GetService("Workspace")
+local RENDER_ORIGIN = Vector3.new(100000, 100000, 100000)
+local DEFAULT_PADDING = 1.35
+local DEFAULT_BACKDROP_COLOR = Color3.fromRGB(0, 255, 0)
+local function getCameraPreset(rawPreset)
+	local preset = if type(rawPreset) == "string" then string.lower(rawPreset) else "isometric"
+	if preset == "front" or preset == "top" or preset == "icon" then
+		return preset
+	end
+	return "isometric"
+end
+local function getBackdropColor(rawColor)
+	local _rawColor = rawColor
+	if not (type(_rawColor) == "table") then
+		return DEFAULT_BACKDROP_COLOR
+	end
+	local values = rawColor
+	local _condition = (values[1])
+	if _condition == nil then
+		_condition = 0
+	end
+	local r = math.clamp(_condition, 0, 255)
+	local _condition_1 = (values[2])
+	if _condition_1 == nil then
+		_condition_1 = 255
+	end
+	local g = math.clamp(_condition_1, 0, 255)
+	local _condition_2 = (values[3])
+	if _condition_2 == nil then
+		_condition_2 = 0
+	end
+	local b = math.clamp(_condition_2, 0, 255)
+	return Color3.fromRGB(r, g, b)
+end
+local function getCameraDirection(preset)
+	if preset == "front" then
+		return Vector3.new(0, 0, 1)
+	end
+	if preset == "top" then
+		return Vector3.new(0.05, 1, 0.05).Unit
+	end
+	if preset == "icon" then
+		return Vector3.new(-0.7, 0.35, 1).Unit
+	end
+	return Vector3.new(-1, 0.7, 1).Unit
+end
+local function collectBaseParts(root)
+	local parts = {}
+	if root:IsA("BasePart") then
+		local _root = root
+		table.insert(parts, _root)
+	end
+	for _, desc in root:GetDescendants() do
+		if desc:IsA("BasePart") then
+			table.insert(parts, desc)
+		end
+	end
+	return parts
+end
+local function createRenderableClone(target, stage)
+	if target:IsA("Model") then
+		local clone = target:Clone()
+		clone.Parent = stage
+		clone:PivotTo(CFrame.new(RENDER_ORIGIN))
+		return clone
+	end
+	if target:IsA("BasePart") then
+		local wrapper = Instance.new("Model")
+		wrapper.Name = target.Name
+		wrapper.Parent = stage
+		local clone = target:Clone()
+		clone.Parent = wrapper
+		clone.Position = RENDER_ORIGIN
+		return wrapper
+	end
+	return nil
+end
+local function styleBaseParts(parts)
+	for _, part in parts do
+		part.Anchored = true
+		part.CanCollide = false
+		part.CanTouch = false
+		part.CanQuery = false
+		part.CastShadow = false
+	end
+end
+local function createBackdrop(parent, focusPosition, cameraDirection, radius, cameraDistance, backdropColor, fieldOfView, aspectRatio)
+	local frustumDistance = cameraDistance + radius + 10
+	local backdropHeight = math.max(radius * 6, 2 * math.tan(math.rad(fieldOfView) / 2) * frustumDistance * 1.2)
+	local backdropWidth = math.max(radius * 6, backdropHeight * aspectRatio)
+	local backdrop = Instance.new("Part")
+	backdrop.Name = "_MCPRenderBackdrop"
+	backdrop.Anchored = true
+	backdrop.CanCollide = false
+	backdrop.CanTouch = false
+	backdrop.CanQuery = false
+	backdrop.CastShadow = false
+	backdrop.Material = Enum.Material.SmoothPlastic
+	backdrop.Color = backdropColor
+	backdrop.Size = Vector3.new(backdropWidth, backdropHeight, 1)
+	local _focusPosition = focusPosition
+	local _cameraDirection = cameraDirection
+	local _arg0 = radius + 6
+	backdrop.CFrame = CFrame.lookAt(_focusPosition - (_cameraDirection * _arg0), focusPosition)
+	backdrop.Parent = parent
+	return backdrop
+end
+local function renderModelScreenshot(requestData)
+	local instancePath = requestData.instancePath
+	if not (instancePath ~= "" and instancePath) then
+		return {
+			error = "instancePath is required",
+		}
+	end
+	local target = getInstanceByPath(instancePath)
+	if not target then
+		return {
+			error = `Instance not found: {instancePath}`,
+		}
+	end
+	if not target:IsA("Model") and not target:IsA("BasePart") then
+		return {
+			error = "Target instance must be a Model or BasePart",
+		}
+	end
+	local currentCamera = Workspace.CurrentCamera
+	if not currentCamera then
+		return {
+			error = "Workspace.CurrentCamera is not available",
+		}
+	end
+	local cameraPreset = getCameraPreset(requestData.cameraPreset)
+	local _condition = (requestData.padding)
+	if _condition == nil then
+		_condition = DEFAULT_PADDING
+	end
+	local padding = math.max(_condition, 1)
+	local backdropColor = getBackdropColor(requestData.backdropColor)
+	local previousSelection = Selection:Get()
+	local previousCameraType = currentCamera.CameraType
+	local previousCameraCFrame = currentCamera.CFrame
+	local previousCameraFocus = currentCamera.Focus
+	local previousFieldOfView = currentCamera.FieldOfView
+	local previousCameraSubject = currentCamera.CameraSubject
+	local stage
+	local ok, result = pcall(function()
+		stage = Instance.new("Model")
+		stage.Name = "_MCPRenderStage"
+		stage.Parent = Workspace
+		local renderRoot = createRenderableClone(target, stage)
+		if not renderRoot then
+			return {
+				error = "Failed to clone render target",
+			}
+		end
+		local baseParts = collectBaseParts(renderRoot)
+		if #baseParts == 0 then
+			return {
+				error = "Target does not contain any BaseParts to render",
+			}
+		end
+		styleBaseParts(baseParts)
+		local boundingBoxCFrame, boundingBoxSize = renderRoot:GetBoundingBox()
+		local focusPosition = boundingBoxCFrame.Position
+		local radius = math.max(boundingBoxSize.Magnitude / 2, 2)
+		local fieldOfView = if currentCamera.FieldOfView > 0 then currentCamera.FieldOfView else 70
+		local aspectRatio = if currentCamera.ViewportSize.Y > 0 then currentCamera.ViewportSize.X / currentCamera.ViewportSize.Y else 16 / 9
+		local cameraDirection = getCameraDirection(cameraPreset)
+		local cameraDistance = math.max(12, (radius * padding) / math.tan(math.rad(fieldOfView) / 2))
+		createBackdrop(stage, focusPosition, cameraDirection, radius, cameraDistance, backdropColor, fieldOfView, aspectRatio)
+		pcall(function()
+			Selection:Set({})
+		end)
+		currentCamera.CameraType = Enum.CameraType.Scriptable
+		currentCamera.FieldOfView = fieldOfView
+		local _arg0 = cameraDirection * cameraDistance
+		currentCamera.CFrame = CFrame.lookAt(focusPosition + _arg0, focusPosition)
+		currentCamera.Focus = CFrame.new(focusPosition)
+		task.wait()
+		task.wait(0.15)
+		local captureResult = CaptureHandlers.captureScreenshotData()
+		if captureResult.error ~= nil then
+			return captureResult
+		end
+		captureResult.instancePath = instancePath
+		captureResult.instanceName = target.Name
+		captureResult.cameraPreset = cameraPreset
+		return captureResult
+	end)
+	pcall(function()
+		currentCamera.CameraType = previousCameraType
+		currentCamera.CFrame = previousCameraCFrame
+		currentCamera.Focus = previousCameraFocus
+		currentCamera.FieldOfView = previousFieldOfView
+		if previousCameraSubject then
+			currentCamera.CameraSubject = previousCameraSubject
+		end
+	end)
+	pcall(function()
+		Selection:Set(previousSelection)
+	end)
+	if stage then
+		pcall(function()
+			stage:Destroy()
+		end)
+	end
+	if not ok then
+		return {
+			error = `Failed to render model screenshot: {tostring(result)}`,
+		}
+	end
+	return result
+end
+return {
+	renderModelScreenshot = renderModelScreenshot,
+}
+]]></string>
+          </Properties>
+        </Item>
+        <Item class="ModuleScript" referent="13">
+          <Properties>
             <string name="Name">ScriptHandlers</string>
             <string name="Source"><![CDATA[-- Compiled with roblox-ts v3.0.0
 local TS = require(script.Parent.Parent.Parent.include.RuntimeLib)
@@ -4694,7 +4929,7 @@ return {
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="13">
+        <Item class="ModuleScript" referent="14">
           <Properties>
             <string name="Name">TestHandlers</string>
             <string name="Source"><![CDATA[-- Compiled with roblox-ts v3.0.0
@@ -4991,7 +5226,7 @@ return {
           </Properties>
         </Item>
       </Item>
-      <Item class="ModuleScript" referent="14">
+      <Item class="ModuleScript" referent="15">
         <Properties>
           <string name="Name">Recording</string>
           <string name="Source"><![CDATA[-- Compiled with roblox-ts v3.0.0
@@ -5021,11 +5256,11 @@ return {
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="15">
+      <Item class="ModuleScript" referent="16">
         <Properties>
           <string name="Name">State</string>
           <string name="Source"><![CDATA[-- Compiled with roblox-ts v3.0.0
-local CURRENT_VERSION = "2.5.1"
+local CURRENT_VERSION = "2.6.0-next.0"
 local MAX_CONNECTIONS = 5
 local BASE_PORT = 58741
 local activeTabIndex = 0
@@ -5112,7 +5347,7 @@ return {
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="16">
+      <Item class="ModuleScript" referent="17">
         <Properties>
           <string name="Name">UI</string>
           <string name="Source"><![CDATA[-- Compiled with roblox-ts v3.0.0
@@ -5740,7 +5975,7 @@ return {
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="17">
+      <Item class="ModuleScript" referent="18">
         <Properties>
           <string name="Name">Utils</string>
           <string name="Source"><![CDATA[-- Compiled with roblox-ts v3.0.0
@@ -6270,11 +6505,11 @@ return {
         </Properties>
       </Item>
     </Item>
-    <Item class="Folder" referent="21">
+    <Item class="Folder" referent="22">
       <Properties>
         <string name="Name">include</string>
       </Properties>
-      <Item class="ModuleScript" referent="18">
+      <Item class="ModuleScript" referent="19">
         <Properties>
           <string name="Name">Promise</string>
           <string name="Source"><![CDATA[--[[
@@ -8348,7 +8583,7 @@ return Promise
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="19">
+      <Item class="ModuleScript" referent="20">
         <Properties>
           <string name="Name">RuntimeLib</string>
           <string name="Source"><![CDATA[local Promise = require(script.Parent.Promise)
@@ -8615,15 +8850,15 @@ return TS
         </Properties>
       </Item>
     </Item>
-    <Item class="Folder" referent="22">
+    <Item class="Folder" referent="23">
       <Properties>
         <string name="Name">node_modules</string>
       </Properties>
-      <Item class="Folder" referent="23">
+      <Item class="Folder" referent="24">
         <Properties>
           <string name="Name">@rbxts</string>
         </Properties>
-      <Item class="ModuleScript" referent="20">
+      <Item class="ModuleScript" referent="21">
         <Properties>
           <string name="Name">services</string>
           <string name="Source"><![CDATA[return setmetatable({}, {

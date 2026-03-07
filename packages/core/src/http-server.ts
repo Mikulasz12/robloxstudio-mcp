@@ -72,6 +72,36 @@ const TOOL_HANDLERS: Record<string, ToolHandler> = {
   get_asset_thumbnail: (tools, body) => tools.getAssetThumbnail(body.assetId, body.size),
   insert_asset: (tools, body) => tools.insertAsset(body.assetId, body.parentPath, body.position),
   preview_asset: (tools, body) => tools.previewAsset(body.assetId, body.includeProperties, body.maxDepth),
+  render_object_screenshot: (tools, body) => tools.renderObjectScreenshot(body.instancePath, {
+    cameraPreset: body.cameraPreset,
+    padding: body.padding,
+    backdropColor: body.backdropColor,
+    savePath: body.savePath,
+    outputDir: body.outputDir,
+    fileName: body.fileName,
+    returnImage: body.returnImage,
+  }),
+  render_model_screenshot: (tools, body) => tools.renderModelScreenshot(body.instancePath, {
+    cameraPreset: body.cameraPreset,
+    padding: body.padding,
+    backdropColor: body.backdropColor,
+    savePath: body.savePath,
+    outputDir: body.outputDir,
+    fileName: body.fileName,
+    returnImage: body.returnImage,
+  }),
+  batch_render_objects: (tools, body) => tools.batchRenderObjects(body.parentPath, body.outputDir, {
+    recursive: body.recursive,
+    cameraPreset: body.cameraPreset,
+    padding: body.padding,
+    backdropColor: body.backdropColor,
+  }),
+  batch_render_models: (tools, body) => tools.batchRenderModels(body.parentPath, body.outputDir, {
+    recursive: body.recursive,
+    cameraPreset: body.cameraPreset,
+    padding: body.padding,
+    backdropColor: body.backdropColor,
+  }),
   capture_screenshot: (tools) => tools.captureScreenshot(),
 };
 

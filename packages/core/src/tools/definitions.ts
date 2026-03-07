@@ -1314,6 +1314,170 @@ part(0,2,0,2,1,1,"b")`,
     }
   },
   {
+    name: 'render_object_screenshot',
+    category: 'write',
+    description: 'Stage a renderable Studio object by instance path, frame it with a temporary camera, capture a screenshot, and optionally save the PNG to disk. Supports Models and BaseParts such as MeshPart.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        instancePath: {
+          type: 'string',
+          description: 'Target Studio instance path. Must resolve to a Model or BasePart such as MeshPart.'
+        },
+        cameraPreset: {
+          type: 'string',
+          enum: ['front', 'isometric', 'top', 'icon'],
+          description: 'Camera angle preset (default: isometric)'
+        },
+        padding: {
+          type: 'number',
+          description: 'Framing multiplier applied to the object bounds (default: 1.35)'
+        },
+        backdropColor: {
+          type: 'array',
+          items: { type: 'number' },
+          description: 'Solid RGB backdrop color as [r, g, b] (default: [0,255,0])'
+        },
+        savePath: {
+          type: 'string',
+          description: 'Optional filesystem path where the PNG should be written'
+        },
+        outputDir: {
+          type: 'string',
+          description: 'Optional filesystem directory where the PNG should be written with an auto-generated filename'
+        },
+        fileName: {
+          type: 'string',
+          description: 'Optional file name to use when outputDir is provided (default: derived from the object name)'
+        },
+        returnImage: {
+          type: 'boolean',
+          description: 'Return the PNG image content in the MCP response (default: true)'
+        }
+      },
+      required: ['instancePath']
+    }
+  },
+  {
+    name: 'render_model_screenshot',
+    category: 'write',
+    description: 'Deprecated alias for render_object_screenshot. Stages a Model or BasePart from Studio by instance path, frames it with a temporary camera, captures a screenshot, and optionally saves the PNG to disk.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        instancePath: {
+          type: 'string',
+          description: 'Target Studio instance path. Must resolve to a Model or BasePart such as MeshPart.'
+        },
+        cameraPreset: {
+          type: 'string',
+          enum: ['front', 'isometric', 'top', 'icon'],
+          description: 'Camera angle preset (default: isometric)'
+        },
+        padding: {
+          type: 'number',
+          description: 'Framing multiplier applied to the model bounds (default: 1.35)'
+        },
+        backdropColor: {
+          type: 'array',
+          items: { type: 'number' },
+          description: 'Solid RGB backdrop color as [r, g, b] (default: [0,255,0])'
+        },
+        savePath: {
+          type: 'string',
+          description: 'Optional filesystem path where the PNG should be written'
+        },
+        outputDir: {
+          type: 'string',
+          description: 'Optional filesystem directory where the PNG should be written with an auto-generated filename'
+        },
+        fileName: {
+          type: 'string',
+          description: 'Optional file name to use when outputDir is provided (default: derived from the object name)'
+        },
+        returnImage: {
+          type: 'boolean',
+          description: 'Return the PNG image content in the MCP response (default: true)'
+        }
+      },
+      required: ['instancePath']
+    }
+  },
+  {
+    name: 'batch_render_objects',
+    category: 'write',
+    description: 'Render all direct or descendant renderable objects under a Studio path and save PNGs plus a manifest to an output directory. Supports Models and BaseParts such as MeshPart.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        parentPath: {
+          type: 'string',
+          description: 'Studio path whose child or descendant Models/BaseParts should be rendered'
+        },
+        outputDir: {
+          type: 'string',
+          description: 'Filesystem directory for generated PNGs and manifest JSON'
+        },
+        recursive: {
+          type: 'boolean',
+          description: 'Recursively traverse nested folders/models (default: false)'
+        },
+        cameraPreset: {
+          type: 'string',
+          enum: ['front', 'isometric', 'top', 'icon'],
+          description: 'Camera angle preset used for each render (default: isometric)'
+        },
+        padding: {
+          type: 'number',
+          description: 'Framing multiplier applied to each object bounds (default: 1.35)'
+        },
+        backdropColor: {
+          type: 'array',
+          items: { type: 'number' },
+          description: 'Solid RGB backdrop color as [r, g, b] (default: [0,255,0])'
+        }
+      },
+      required: ['parentPath', 'outputDir']
+    }
+  },
+  {
+    name: 'batch_render_models',
+    category: 'write',
+    description: 'Deprecated alias for batch_render_objects. Renders child Models/BaseParts under a Studio path and saves PNGs plus a manifest to an output directory.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        parentPath: {
+          type: 'string',
+          description: 'Studio path whose child or descendant Models/BaseParts should be rendered'
+        },
+        outputDir: {
+          type: 'string',
+          description: 'Filesystem directory for generated PNGs and manifest JSON'
+        },
+        recursive: {
+          type: 'boolean',
+          description: 'Recursively traverse nested folders/models (default: false)'
+        },
+        cameraPreset: {
+          type: 'string',
+          enum: ['front', 'isometric', 'top', 'icon'],
+          description: 'Camera angle preset used for each render (default: isometric)'
+        },
+        padding: {
+          type: 'number',
+          description: 'Framing multiplier applied to each model bounds (default: 1.35)'
+        },
+        backdropColor: {
+          type: 'array',
+          items: { type: 'number' },
+          description: 'Solid RGB backdrop color as [r, g, b] (default: [0,255,0])'
+        }
+      },
+      required: ['parentPath', 'outputDir']
+    }
+  },
+  {
     name: 'capture_screenshot',
     category: 'read',
     description: 'Capture a screenshot of the Roblox Studio viewport and return it as a PNG image. Requires EditableImage API to be enabled: Game Settings > Security > "Allow Mesh / Image APIs". Only works in Edit mode with the viewport visible.',

@@ -210,6 +210,40 @@ export class RobloxStudioMCPServer {
             return await this.tools.insertAsset((args as any)?.assetId as number, (args as any)?.parentPath, (args as any)?.position);
           case 'preview_asset':
             return await this.tools.previewAsset((args as any)?.assetId as number, (args as any)?.includeProperties, (args as any)?.maxDepth);
+          case 'render_object_screenshot':
+            return await this.tools.renderObjectScreenshot((args as any)?.instancePath as string, {
+              cameraPreset: (args as any)?.cameraPreset,
+              padding: (args as any)?.padding,
+              backdropColor: (args as any)?.backdropColor,
+              savePath: (args as any)?.savePath,
+              outputDir: (args as any)?.outputDir,
+              fileName: (args as any)?.fileName,
+              returnImage: (args as any)?.returnImage,
+            });
+          case 'render_model_screenshot':
+            return await this.tools.renderModelScreenshot((args as any)?.instancePath as string, {
+              cameraPreset: (args as any)?.cameraPreset,
+              padding: (args as any)?.padding,
+              backdropColor: (args as any)?.backdropColor,
+              savePath: (args as any)?.savePath,
+              outputDir: (args as any)?.outputDir,
+              fileName: (args as any)?.fileName,
+              returnImage: (args as any)?.returnImage,
+            });
+          case 'batch_render_objects':
+            return await this.tools.batchRenderObjects((args as any)?.parentPath as string, (args as any)?.outputDir as string, {
+              recursive: (args as any)?.recursive,
+              cameraPreset: (args as any)?.cameraPreset,
+              padding: (args as any)?.padding,
+              backdropColor: (args as any)?.backdropColor,
+            });
+          case 'batch_render_models':
+            return await this.tools.batchRenderModels((args as any)?.parentPath as string, (args as any)?.outputDir as string, {
+              recursive: (args as any)?.recursive,
+              cameraPreset: (args as any)?.cameraPreset,
+              padding: (args as any)?.padding,
+              backdropColor: (args as any)?.backdropColor,
+            });
           case 'capture_screenshot':
             return await this.tools.captureScreenshot();
 

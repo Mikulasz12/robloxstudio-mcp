@@ -12,6 +12,7 @@ import BuildHandlers from "./handlers/BuildHandlers";
 import AssetHandlers from "./handlers/AssetHandlers";
 import CaptureHandlers from "./handlers/CaptureHandlers";
 import InputHandlers from "./handlers/InputHandlers";
+import RenderHandlers from "./handlers/RenderHandlers";
 import { Connection, RequestPayload, PollResponse } from "../types";
 
 type Handler = (data: Record<string, unknown>) => unknown;
@@ -76,6 +77,7 @@ const routeMap: Record<string, Handler> = {
 	"/api/preview-asset": AssetHandlers.previewAsset,
 
 	"/api/capture-screenshot": CaptureHandlers.captureScreenshot,
+	"/api/render-model-screenshot": RenderHandlers.renderModelScreenshot,
 
 	"/api/simulate-mouse-input": InputHandlers.simulateMouseInput,
 	"/api/simulate-keyboard-input": InputHandlers.simulateKeyboardInput,

@@ -6,6 +6,74 @@ import { rgbaToPng } from '../png-encoder.js';
 import * as fs from 'fs';
 import * as path from 'path';
 
+type RawImageCaptureResponse = {
+  success?: boolean;
+  error?: string;
+  width?: number;
+  height?: number;
+  data?: string;
+  instancePath?: string;
+  instanceName?: string;
+  cameraPreset?: string;
+};
+
+function encodePngFromRgbaResponse(response: RawImageCaptureResponse): Buffer {
+  if (!response.data || response.width === undefined || response.height === undefined) {
+    throw new Error('Render response missing data, width, or height');
+  }
+
+  const rgbaBuffer = Buffer.from(response.data, 'base64');
+  return rgbaToPng(rgbaBuffer, response.width, response.height);
+}
+
+function ensureParentDirectory(filePath: string) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+}
+
+function writePng(filePath: string, pngBuffer: Buffer) {
+  ensureParentDirectory(filePath);
+  fs.writeFileSync(filePath, pngBuffer);
+}
+
+function sanitizeFileSegment(name: string): string {
+  const sanitized = name
+    .replace(/[<>:"/\\|?*\x00-\x1f]/g, '_')
+    .replace(/\s+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '');
+
+  return sanitized || 'model';
+}
+
+function ensurePngExtension(fileName: string): string {
+  return path.extname(fileName) ? fileName : `${fileName}.png`;
+}
+
+function getDefaultObjectName(instancePath: string, instanceName?: string): string {
+  return instanceName || instancePath.split('.').pop() || 'object';
+}
+
+function resolveSingleRenderSavePath(
+  instancePath: string,
+  instanceName: string | undefined,
+  options?: {
+    savePath?: string;
+    outputDir?: string;
+    fileName?: string;
+  }
+) {
+  if (options?.savePath) {
+    return options.savePath;
+  }
+
+  if (!options?.outputDir) {
+    return undefined;
+  }
+
+  const baseName = sanitizeFileSegment(options.fileName || getDefaultObjectName(instancePath, instanceName));
+  return path.join(options.outputDir, ensurePngExtension(baseName));
+}
+
 export class RobloxStudioTools {
   private client: StudioHttpClient;
   private openCloudClient: OpenCloudClient;
@@ -1271,6 +1339,232 @@ export class RobloxStudioTools {
     };
   }
 
+  private async requestRenderObjectScreenshot(
+    instancePath: string,
+    options?: {
+      cameraPreset?: string;
+      padding?: number;
+      backdropColor?: [number, number, number];
+    }
+  ) {
+    if (!instancePath) {
+      throw new Error('instancePath is required for render_object_screenshot');
+    }
+
+    const response = await this.client.request('/api/render-model-screenshot', {
+      instancePath,
+      cameraPreset: options?.cameraPreset,
+      padding: options?.padding,
+      backdropColor: options?.backdropColor,
+    }) as RawImageCaptureResponse;
+
+    if (response.error) {
+      throw new Error(response.error);
+    }
+
+    return response;
+  }
+
+  async renderObjectScreenshot(
+    instancePath: string,
+    options?: {
+      cameraPreset?: string;
+      padding?: number;
+      backdropColor?: [number, number, number];
+      savePath?: string;
+      outputDir?: string;
+      fileName?: string;
+      returnImage?: boolean;
+    }
+  ) {
+    const response = await this.requestRenderObjectScreenshot(instancePath, options);
+    const pngBuffer = encodePngFromRgbaResponse(response);
+    const savePath = resolveSingleRenderSavePath(
+      response.instancePath ?? instancePath,
+      response.instanceName,
+      options,
+    );
+    const returnImage = options?.returnImage ?? true;
+
+    if (savePath) {
+      writePng(savePath, pngBuffer);
+    }
+
+    const content: Array<{ type: 'image' | 'text'; data?: string; mimeType?: string; text?: string }> = [];
+
+    if (returnImage) {
+      content.push({
+        type: 'image',
+        data: pngBuffer.toString('base64'),
+        mimeType: 'image/png',
+      });
+    }
+
+    content.push({
+      type: 'text',
+      text: JSON.stringify({
+        success: true,
+        instancePath: response.instancePath ?? instancePath,
+        instanceName: response.instanceName,
+        cameraPreset: response.cameraPreset ?? options?.cameraPreset ?? 'isometric',
+        width: response.width,
+        height: response.height,
+        savedPath: savePath,
+      })
+    });
+
+    return { content };
+  }
+
+  async renderModelScreenshot(
+    instancePath: string,
+    options?: {
+      cameraPreset?: string;
+      padding?: number;
+      backdropColor?: [number, number, number];
+      savePath?: string;
+      outputDir?: string;
+      fileName?: string;
+      returnImage?: boolean;
+    }
+  ) {
+    return this.renderObjectScreenshot(instancePath, options);
+  }
+
+  private async collectRenderablePaths(parentPath: string, recursive: boolean): Promise<string[]> {
+    const response = await this.client.request('/api/instance-children', {
+      instancePath: parentPath,
+    }) as {
+      error?: string;
+      children?: Array<{ name: string; className: string; path: string; hasChildren: boolean }>;
+    };
+
+    if (response.error) {
+      throw new Error(response.error);
+    }
+
+    const children = response.children ?? [];
+    const renderablePaths = children
+      .filter(child => child.className === 'Model' || child.className === 'Part' || child.className === 'MeshPart' || child.className === 'WedgePart' || child.className === 'CornerWedgePart' || child.className === 'TrussPart' || child.className === 'SpawnLocation' || child.className === 'Seat' || child.className === 'VehicleSeat' || child.className === 'UnionOperation')
+      .map(child => child.path);
+
+    if (!recursive) {
+      return renderablePaths;
+    }
+
+    const nestedTargets = children
+      .filter(child => child.hasChildren)
+      .map(child => child.path);
+
+    for (const nestedPath of nestedTargets) {
+      renderablePaths.push(...await this.collectRenderablePaths(nestedPath, true));
+    }
+
+    return renderablePaths;
+  }
+
+  async batchRenderObjects(
+    parentPath: string,
+    outputDir: string,
+    options?: {
+      recursive?: boolean;
+      cameraPreset?: string;
+      padding?: number;
+      backdropColor?: [number, number, number];
+    }
+  ) {
+    if (!parentPath || !outputDir) {
+      throw new Error('parentPath and outputDir are required for batch_render_objects');
+    }
+
+    const recursive = options?.recursive ?? false;
+    const renderablePaths = await this.collectRenderablePaths(parentPath, recursive);
+    const usedFilePaths = new Set<string>();
+    const results: Array<Record<string, unknown>> = [];
+
+    fs.mkdirSync(outputDir, { recursive: true });
+
+    for (const objectPath of renderablePaths) {
+      const objectName = objectPath.split('.').pop() || 'object';
+      const fileBaseName = sanitizeFileSegment(objectName);
+      let filePath = path.join(outputDir, `${fileBaseName}.png`);
+      let suffix = 1;
+
+      while (usedFilePaths.has(filePath)) {
+        filePath = path.join(outputDir, `${fileBaseName}_${suffix}.png`);
+        suffix += 1;
+      }
+
+      usedFilePaths.add(filePath);
+
+      try {
+        const response = await this.requestRenderObjectScreenshot(objectPath, options);
+        const pngBuffer = encodePngFromRgbaResponse(response);
+        writePng(filePath, pngBuffer);
+
+        results.push({
+          success: true,
+          instancePath: response.instancePath ?? objectPath,
+          instanceName: response.instanceName ?? objectName,
+          cameraPreset: response.cameraPreset ?? options?.cameraPreset ?? 'isometric',
+          width: response.width,
+          height: response.height,
+          filePath,
+        });
+      } catch (error) {
+        results.push({
+          success: false,
+          instancePath: objectPath,
+          instanceName: objectName,
+          filePath,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    const manifestPath = path.join(outputDir, 'render-manifest.json');
+    fs.writeFileSync(
+      manifestPath,
+      JSON.stringify({
+        parentPath,
+        outputDir,
+        recursive,
+        cameraPreset: options?.cameraPreset ?? 'isometric',
+        totalObjects: renderablePaths.length,
+        renderedAt: new Date().toISOString(),
+        results,
+      }, null, 2)
+    );
+
+    return {
+      content: [{
+        type: 'text',
+        text: JSON.stringify({
+          success: true,
+          parentPath,
+          outputDir,
+          recursive,
+          totalObjects: renderablePaths.length,
+          manifestPath,
+          results,
+        })
+      }]
+    };
+  }
+
+  async batchRenderModels(
+    parentPath: string,
+    outputDir: string,
+    options?: {
+      recursive?: boolean;
+      cameraPreset?: string;
+      padding?: number;
+      backdropColor?: [number, number, number];
+    }
+  ) {
+    return this.batchRenderObjects(parentPath, outputDir, options);
+  }
+
   async simulateMouseInput(action: string, x: number, y: number, button?: string, scrollDirection?: string) {
     if (!action) {
       throw new Error('action is required for simulate_mouse_input');
@@ -1348,13 +1642,7 @@ export class RobloxStudioTools {
   }
 
   async captureScreenshot() {
-    const response = await this.client.request('/api/capture-screenshot', {}) as {
-      success?: boolean;
-      error?: string;
-      width?: number;
-      height?: number;
-      data?: string;
-    };
+    const response = await this.client.request('/api/capture-screenshot', {}) as RawImageCaptureResponse;
 
     if (response.error) {
       return {
@@ -1365,12 +1653,7 @@ export class RobloxStudioTools {
       };
     }
 
-    if (!response.data || !response.width || !response.height) {
-      throw new Error('Screenshot response missing data, width, or height');
-    }
-
-    const rgbaBuffer = Buffer.from(response.data, 'base64');
-    const pngBuffer = rgbaToPng(rgbaBuffer, response.width, response.height);
+    const pngBuffer = encodePngFromRgbaResponse(response);
 
     return {
       content: [{

@@ -1,6 +1,6 @@
 {
   "name": "robloxstudio-mcp-monorepo",
-  "version": "2.5.1",
+  "version": "2.6.0-next.0",
   "private": true,
   "type": "module",
   "workspaces": [
